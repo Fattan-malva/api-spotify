@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Spotify Player</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+    }
+
+    body {
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .bg {
+      position: fixed;
+      inset: -80px;
+      z-index: 0;
+      background-size: cover;
+      background-position: center;
+      filter: blur(80px) brightness(.35) saturate(1.3);
+      transform: scale(1.15);
+      transition: background-image .6s ease;
+    }
+
+    .bg-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, .15) 0%, rgba(0, 0, 0, .65) 100%);
+    }
+
+    .content {
+      position: relative;
+      z-index: 2;
+      width: min(1120px, calc(100% - 48px));
+      height: min(500px, calc(100vh - 48px));
+      display: grid;
+      grid-template-columns: min(46vw, 500px) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) 166px;
+      align-content: center;
+      align-items: stretch;
+      justify-content: center;
+      column-gap: clamp(30px, 4vw, 64px);
+      margin: auto;
+    }
+
+    .artwork {
+      grid-column: 1;
+      grid-row: 1 / span 2;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      justify-self: stretch;
+      align-self: stretch;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
+      background: rgba(255, 255, 255, .06);
+    }
+
+    .artwork img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      opacity: 0;
+      transition: opacity .4s ease;
+    }
+
+    .artwork img.loaded {
+      opacity: 1;
+    }
+
+    .info {
+      grid-column: 2;
+      grid-row: 1;
+      text-align: left;
+      width: 100%;
+      min-width: 0;
+      align-self: start;
+      padding-top: 4px;
+      overflow: hidden;
+    }
+
+    .info h1 {
+      color: #fff;
+      font-size: clamp(24px, 4vw, 36px);
+      font-weight: 700;
+      white-space: nowrap;
+      display: inline-block;
+      padding-left: 100%;
+      animation: scrollText 12s linear infinite;
+    }
+
+    @keyframes scrollText {
+      0% {
+        transform: translateX(0);
+      }
+
+      100% {
+        transform: translateX(-100%);
+      }
+    }
+
+    .info h2 {
+      color: rgba(255, 255, 255, .7);
+      font-size: clamp(14px, 2vw, 18px);
+      margin-top: 6px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .info .meta {
+      color: rgba(255, 255, 255, .5);
+      font-size: 13px;
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .info .stats {
+      color: rgba(255, 255, 255, .45);
+      font-size: 13px;
+      margin-top: 16px;
+      display: flex;
+      gap: 18px;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .player {
+      grid-column: 2;
+      grid-row: 2;
+      width: 100%;
+      height: 166px;
+      max-width: none;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
+      align-self: end;
+      background: rgba(0, 0, 0, .2);
+    }
+
+    .player iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #181818;
+    }
+
+    #audio {
+      display: none;
+    }
+
+    #loadingWrap {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .spinner {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, .15);
+      border-top-color: #1db954;
+      animation: spin .8s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .loading {
+      color: rgba(255, 255, 255, .8);
+      font-size: 14px;
+      letter-spacing: .5px;
+    }
+
+    #controls {
+      display: none;
+      position: fixed;
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%);
+      z-index: 20;
+      align-items: center;
+      gap: 14px;
+      background: rgba(0, 0, 0, .72);
+      border: 1px solid rgba(255, 255, 255, .12);
+      padding: 12px 22px;
+      border-radius: 50px;
+      box-shadow: 0 10px 32px rgba(0, 0, 0, .5);
+      backdrop-filter: blur(8px);
+    }
+
+    #controls .ctl-btn {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      color: #fff;
+      background: rgba(255, 255, 255, .12);
+      transition: background .2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #controls .ctl-btn:hover {
+      background: rgba(255, 255, 255, .25);
+    }
+
+    #controls .ctl-btn.main {
+      background: #1db954;
+    }
+
+    .click-hint {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .65);
+      color: #fff;
+      cursor: pointer;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: .5px;
+    }
+
+    .click-hint .play-ico {
+      width: 84px;
+      height: 84px;
+      border-radius: 50%;
+      background: #1db954;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      box-shadow: 0 12px 40px rgba(29, 185, 84, .5);
+    }
+
+    .click-hint .play-ico::after {
+      content: "";
+      display: block;
+      width: 0;
+      height: 0;
+      border-left: 26px solid #fff;
+      border-top: 16px solid transparent;
+      border-bottom: 16px solid transparent;
+      margin-left: 6px;
+    }
+
+    .error {
+      color: #fff;
+      font-size: 16px;
+      text-align: center;
+      max-width: 480px;
+      padding: 20px;
+    }
+
+    .error small {
+      display: block;
+      margin-top: 10px;
+      color: rgba(255, 255, 255, .5);
+      font-size: 12px;
+    }
+
+    @media (max-width:760px) {
+      .content {
+        width: 100%;
+        height: auto;
+        min-height: 100%;
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        align-content: center;
+        justify-items: center;
+        align-items: center;
+        row-gap: 28px;
+        padding: 24px 18px;
+        overflow: auto;
+      }
+
+      .artwork {
+        grid-column: 1;
+        grid-row: 1;
+        width: min(78vw, 360px);
+        height: auto;
+        aspect-ratio: 1;
+        justify-self: center;
+        align-self: auto;
+      }
+
+      .info {
+        grid-column: 1;
+        grid-row: 2;
+        text-align: center;
+        width: 100%;
+        padding-top: 0;
+        align-self: auto;
+      }
+
+      .info .stats {
+        justify-content: center;
+      }
+
+      .player {
+        grid-column: 1;
+        grid-row: 3;
+        width: 100%;
+        height: 166px;
+        align-self: auto;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg" id="bg"></div>
+  <div class="bg-overlay"></div>
+
+  <div class="content" id="content">
+    <div id="loadingWrap">
+      <div class="spinner"></div>
+      <div class="loading">Loading track...</div>
+    </div>
+  </div>
+
+  <audio id="audio" preload="auto"></audio>
+
+  <div id="controls">
+    <button class="ctl-btn" id="btnReplay" title="Replay">&#9198;</button>
+    <button class="ctl-btn" id="btnPrev" title="Pause">&#9208;</button>
+    <button class="ctl-btn main" id="btnPlay" title="Play">&#9654;</button>
+    <button class="ctl-btn" id="btnNext" title="Next">&#9197;</button>
+  </div>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var trackId = params.get('trackId');
+      var audio = document.getElementById('audio');
+      var usingEmbed = false;
+
+      function showError(msg) {
+        var wrap = document.getElementById('loadingWrap');
+        if (wrap) wrap.style.display = 'none';
+        var err = document.createElement('div');
+        err.className = 'error';
+        err.innerHTML = '<strong>' + (msg || 'Failed to load track') + '</strong>' +
+          '<small>Check that the trackId is valid and your Spotify app credentials are set.</small>';
+        document.getElementById('content').appendChild(err);
+      }
+
+      function fmt(n) {
+        if (n == null) return null;
+        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      }
+
+      function render(track) {
+        document.title = (track.title || 'Spotify') + ' - ' + (track.artist || '');
+        var wrap = document.getElementById('loadingWrap');
+        if (wrap) wrap.style.display = 'none';
+
+        var art = track.thumbnail || '';
+        if (art) document.getElementById('bg').style.backgroundImage = "url('" + art + "')";
+
+        var content = document.getElementById('content');
+
+        var artwork = document.createElement('div');
+        artwork.className = 'artwork';
+        var img = document.createElement('img');
+        img.alt = track.title || '';
+        img.onload = function () { this.classList.add('loaded'); };
+        img.src = art;
+        artwork.appendChild(img);
+        content.appendChild(artwork);
+
+        var info = document.createElement('div');
+        info.className = 'info';
+        var metaBits = [];
+        if (track.album) metaBits.push(track.album);
+        if (track.explicit) metaBits.push('Explicit');
+        if (track.releaseDate) metaBits.push(track.releaseDate);
+        info.innerHTML = '<h1>' + (track.title || 'Unknown') + '</h1>' +
+          '<h2>' + (track.artist || '') + '</h2>';
+        if (metaBits.length) info.innerHTML += '<div class="meta">' + metaBits.join(' &middot; ') + '</div>';
+        var stats = [];
+        if (track.duration) stats.push('&#9201; ' + track.duration);
+        if (track.popularity != null) stats.push('&#128293; ' + track.popularity + ' / 100');
+        if (stats.length) info.innerHTML += '<div class="stats">' + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
+        content.appendChild(info);
+
+        var player = document.createElement('div');
+        player.className = 'player';
+        content.appendChild(player);
+
+        // Prefer a controllable <audio> element (so VB commands work).
+        // Falls back to the Spotify embed when no preview is available.
+        if (track.previewUrl) {
+          audio.src = track.previewUrl;
+          audio.addEventListener('ended', function () {
+            console.log('[SP] ENDED — track finished');
+            if (window.chrome && window.chrome.webview) {
+              window.chrome.webview.postMessage('videoEnded');
+              console.log('[SP] Sent videoEnded to host');
+            }
+          });
+          audio.addEventListener('play', function () { hideHint(); });
+        } else {
+          usingEmbed = true;
+          var iframe = document.createElement('iframe');
+          iframe.id = 'spWidget';
+          iframe.setAttribute('allow', 'autoplay; encrypted-media');
+          iframe.setAttribute('allowtransparency', 'true');
+          iframe.setAttribute('frameborder', '0');
+          iframe.src = 'https://open.spotify.com/embed/track/' + encodeURIComponent(track.trackId) +
+            '?utm_source=generator&theme=0';
+          player.appendChild(iframe);
+        }
+
+        // Controls tetap tersembunyi (hidden) seperti api-soundcloud:
+        // dikendalikan lewat pesan WebView2 dari aplikasi VB, bukan ditampilkan.
+        ensureHint();
+      }
+
+      var hintShown = false;
+      var hintEl = null;
+
+      function hideHint() {
+        if (hintEl) { hintEl.remove(); hintEl = null; hintShown = false; }
+      }
+
+      function ensureHint() {
+        if (hintShown || hintEl) return;
+        hintShown = true;
+        hintEl = document.createElement('div');
+        hintEl.className = 'click-hint';
+        hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div>';
+        hintEl.addEventListener('click', function () {
+          playSound();
+          hideHint();
+        });
+        document.body.appendChild(hintEl);
+      }
+
+      function playSound() {
+        if (usingEmbed) return;
+        if (audio) audio.play();
+      }
+
+      function pauseSound() {
+        if (usingEmbed) return;
+        if (audio) audio.pause();
+      }
+
+      function replaySound() {
+        if (usingEmbed) return;
+        if (audio) { audio.currentTime = 0; audio.play(); }
+      }
+
+      function nextSound() {
+        replaySound();
+      }
+
+      // Komunikasi dengan VB (WebView2)
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.addEventListener('message', function (event) {
+          var data = event.data;
+          if (data === 'pause') pauseSound();
+          if (data === 'play') playSound();
+          if (data === 'replay') replaySound();
+          if (data === 'next') nextSound();
+        });
+      }
+
+      document.getElementById('btnPlay').addEventListener('click', playSound);
+      document.getElementById('btnPrev').addEventListener('click', pauseSound);
+      document.getElementById('btnReplay').addEventListener('click', replaySound);
+      document.getElementById('btnNext').addEventListener('click', nextSound);
+
+      if (!trackId) {
+        showError('Missing trackId parameter');
+        return;
+      }
+
+      fetch('/track?trackId=' + encodeURIComponent(trackId))
+        .then(function (res) {
+          if (!res.ok) throw new Error('Track not found (HTTP ' + res.status + ')');
+          return res.json();
+        })
+        .then(render)
+        .catch(function (e) { showError(e.message); });
+    })();
+  </script>
+</body>
+
+</html>
