@@ -3,6 +3,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import FastAPI, Query, HTTPException, Request
@@ -12,18 +13,7 @@ from playwright.async_api import async_playwright
 
 
 SPOTIFY_TOKEN_URL = "https://open.spotify.com/get_access_token"
-SPOTIFY_PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v1/query"
-
-# Hash internal Spotify Web Player.
-# Bisa berubah sewaktu-waktu.
-SEARCH_DESKTOP_HASH = (
-    "75bbf6bfcfdf85b8fc828417bfad92b7cd66bf7f556d85670f4da8292373ebec"
-)
-
-TRACK_SEARCH_HASH = (
-    "bc1ca2fcd0ba1013a0fc88e6cc4f190af501851e3dafd3e1ef85840297694428"
-)
-
+SPOTIFY_PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v2/query"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,6 +52,7 @@ async def lifespan(app: FastAPI):
         )
         app.state.token = None
         app.state.token_expire = 0
+        app.state.persisted_hashes = {}
         yield
         await app.state.http.aclose()
         await app.state.browser.close()
@@ -234,6 +225,7 @@ async def get_access_token(app: FastAPI) -> str:
 
     async def on_response(response):
         nonlocal token, expire
+        capture_request(response.request)
         if "open.spotify.com/api/token" not in response.url:
             return
         try:
@@ -243,12 +235,42 @@ async def get_access_token(app: FastAPI) -> str:
         token = j.get("accessToken")
         expire = int(j.get("accessTokenExpirationTimestampMs", 0)) / 1000
 
-    for url in ("https://open.spotify.com/", "https://open.spotify.com/search/_"):
+    def capture_request(request):
+        if "api-partner.spotify.com/pathfinder" not in request.url:
+            return
+
+        try:
+            parsed = parse_qs(urlparse(request.url).query)
+            operation_name = (parsed.get("operationName") or [None])[0]
+            extensions_value = (parsed.get("extensions") or [None])[0]
+
+            if not operation_name or not extensions_value:
+                body = json.loads(request.post_data or "")
+                if not isinstance(body, dict):
+                    return
+                operation_name = body.get("operationName")
+                extensions = body.get("extensions") or {}
+            else:
+                extensions = json.loads(extensions_value)
+        except Exception:
+            return
+
+        if not operation_name or not isinstance(extensions, dict):
+            return
+
+        persisted_query = extensions.get("persistedQuery") or {}
+        sha256_hash = persisted_query.get("sha256Hash")
+
+        if sha256_hash:
+            app.state.persisted_hashes[operation_name] = sha256_hash
+
+    for url in ("https://open.spotify.com/search/hello",):
         page = await browser.new_page()
         page.on("response", on_response)
+        page.on("request", capture_request)
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            for _ in range(40):
+            for _ in range(60):
                 if token:
                     break
                 await asyncio.sleep(0.25)
@@ -270,31 +292,93 @@ async def get_access_token(app: FastAPI) -> str:
     return token
 
 
+async def discover_persisted_hash(
+    app: FastAPI,
+    operation_name: str,
+) -> str:
+    browser = app.state.browser
+    discovered_hash = None
+
+    def capture_request(request):
+        nonlocal discovered_hash
+
+        if (
+            discovered_hash
+            or "api-partner.spotify.com/pathfinder" not in request.url
+        ):
+            return
+
+        try:
+            body = json.loads(request.post_data or "")
+        except Exception:
+            return
+
+        if body.get("operationName") != operation_name:
+            return
+
+        discovered_hash = (
+            body.get("extensions", {})
+            .get("persistedQuery", {})
+            .get("sha256Hash")
+        )
+
+    page = await browser.new_page()
+    page.on("request", capture_request)
+    try:
+        await page.goto(
+            "https://open.spotify.com/search/hello",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        for _ in range(60):
+            if discovered_hash:
+                break
+            await asyncio.sleep(0.25)
+    except Exception:
+        pass
+    finally:
+        await page.close()
+
+    if not discovered_hash:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Hash Spotify untuk operasi {operation_name} tidak ditemukan",
+        )
+
+    app.state.persisted_hashes[operation_name] = discovered_hash
+    return discovered_hash
+
+
 async def spotify_query(
     app: FastAPI,
     operation_name: str,
     variables: dict,
-    sha256_hash: str,
+    sha256_hash: Optional[str] = None,
 ):
     http: httpx.AsyncClient = app.state.http
 
     token = await get_access_token(app)
 
-    params = {
+    sha256_hash = (
+        sha256_hash
+        or app.state.persisted_hashes.get(operation_name)
+        or await discover_persisted_hash(app, operation_name)
+    )
+    if not sha256_hash:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Hash Spotify untuk operasi {operation_name} tidak ditemukan",
+        )
+
+    payload = {
         "operationName": operation_name,
-        "variables": json.dumps(
-            variables,
-            separators=(",", ":"),
-        ),
-        "extensions": json.dumps(
-            {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": sha256_hash,
-                }
-            },
-            separators=(",", ":"),
-        ),
+        "variables": variables,
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": sha256_hash,
+            }
+        },
     }
 
     headers = {
@@ -303,9 +387,9 @@ async def spotify_query(
         "app-platform": "WebPlayer",
     }
 
-    response = await http.get(
+    response = await http.post(
         SPOTIFY_PATHFINDER_URL,
-        params=params,
+        json=payload,
         headers=headers,
     )
 
@@ -319,9 +403,29 @@ async def spotify_query(
             f"Bearer {token}"
         )
 
-        response = await http.get(
+        response = await http.post(
             SPOTIFY_PATHFINDER_URL,
-            params=params,
+            json=payload,
+            headers=headers,
+        )
+
+    if response.status_code in (400, 404):
+        # Persisted query hash dapat berubah tanpa pemberitahuan.
+        app.state.token = None
+        app.state.persisted_hashes.pop(operation_name, None)
+        token = await get_access_token(app)
+        new_hash = await discover_persisted_hash(app, operation_name)
+
+        payload["extensions"] = {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": new_hash,
+            }
+        }
+        headers["authorization"] = f"Bearer {token}"
+        response = await http.post(
+            SPOTIFY_PATHFINDER_URL,
+            json=payload,
             headers=headers,
         )
 
@@ -443,7 +547,6 @@ async def fetch_next_spotify_page(
             "includeAuthors": False,
             "includePreReleases": False,
         },
-        sha256_hash=SEARCH_DESKTOP_HASH,
     )
 
     items, total = extract_search(data)
