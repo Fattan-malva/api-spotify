@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Spotify Player</title>
   <style>
     * {
@@ -179,7 +179,7 @@
       left: 50%;
       top: 50%;
       transform: translate(-50%, -50%);
-      z-index: 5;
+      z-index: 50;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -207,44 +207,39 @@
       letter-spacing: .5px;
     }
 
-    #controls {
-      display: none;
+    .error {
       position: fixed;
       left: 50%;
-      bottom: 26px;
-      transform: translateX(-50%);
-      z-index: 20;
-      align-items: center;
-      gap: 14px;
-      background: rgba(0, 0, 0, .72);
-      border: 1px solid rgba(255, 255, 255, .12);
-      padding: 12px 22px;
-      border-radius: 50px;
-      box-shadow: 0 10px 32px rgba(0, 0, 0, .5);
-      backdrop-filter: blur(8px);
-    }
-
-    #controls .ctl-btn {
-      width: 46px;
-      height: 46px;
-      border-radius: 50%;
-      border: none;
-      cursor: pointer;
-      font-size: 18px;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 50;
       color: #fff;
-      background: rgba(255, 255, 255, .12);
-      transition: background .2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      font-size: 16px;
+      text-align: center;
+      max-width: 480px;
+      padding: 20px;
     }
 
-    #controls .ctl-btn:hover {
-      background: rgba(255, 255, 255, .25);
+    .error small {
+      display: block;
+      margin-top: 10px;
+      color: rgba(255, 255, 255, .5);
+      font-size: 12px;
     }
 
-    #controls .ctl-btn.main {
-      background: #1db954;
+    #status {
+      position: fixed;
+      left: 10px;
+      bottom: 10px;
+      z-index: 100;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, .7);
+      color: rgba(255, 255, 255, .5);
+      font-size: 10px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s ease;
     }
 
     .click-hint {
@@ -286,22 +281,11 @@
       margin-left: 6px;
     }
 
-    .error {
-      color: #fff;
-      font-size: 16px;
-      text-align: center;
-      max-width: 480px;
-      padding: 20px;
-    }
-
-    .error small {
-      display: block;
-      margin-top: 10px;
-      color: rgba(255, 255, 255, .5);
-      font-size: 12px;
-    }
-
     @media (max-width:760px) {
+      body {
+        overflow: auto;
+      }
+
       .content {
         width: 100%;
         height: auto;
@@ -352,6 +336,7 @@
 </head>
 
 <body>
+
   <div class="bg" id="bg"></div>
   <div class="bg-overlay"></div>
 
@@ -363,172 +348,538 @@
   </div>
 
   <audio id="audio" preload="auto"></audio>
-
-  <div id="controls">
-    <button class="ctl-btn" id="btnReplay" title="Replay">&#9198;</button>
-    <button class="ctl-btn" id="btnPrev" title="Pause">&#9208;</button>
-    <button class="ctl-btn main" id="btnPlay" title="Play">&#9654;</button>
-    <button class="ctl-btn" id="btnNext" title="Next">&#9197;</button>
-  </div>
+  <div id="status"></div>
 
   <script>
     (function () {
-      var params = new URLSearchParams(location.search);
-      var trackId = params.get('trackId');
-      var audio = document.getElementById('audio');
-      var usingEmbed = false;
+      "use strict";
 
-      function showError(msg) {
-        var wrap = document.getElementById('loadingWrap');
-        if (wrap) wrap.style.display = 'none';
-        var err = document.createElement('div');
-        err.className = 'error';
-        err.innerHTML = '<strong>' + (msg || 'Failed to load track') + '</strong>' +
-          '<small>Check that the trackId is valid and your Spotify app credentials are set.</small>';
-        document.getElementById('content').appendChild(err);
+      var params = new URLSearchParams(window.location.search);
+      var trackId = params.get("trackId");
+
+      var audio = document.getElementById("audio");
+      var content = document.getElementById("content");
+      var loadingWrap = document.getElementById("loadingWrap");
+      var statusEl = document.getElementById("status");
+
+      var usingAudio = false;
+      var endedSent = false;
+      var playerReady = false;
+      var trackDurationMs = 0;
+      var trackStartedAt = 0;
+      var pollingInterval = null;
+      var isPlaying = false;
+      var hintEl = null;
+      var hintShown = false;
+
+      function log() {
+        var args = Array.prototype.slice.call(arguments);
+        args.unshift("[SP]");
+        console.log.apply(console, args);
+      }
+
+      function setStatus(message) {
+        if (statusEl) {
+          statusEl.textContent = message || "";
+        }
+      }
+
+      function sendToHost(message) {
+        log("Sending message:", message);
+        try {
+          if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(message);
+            log("WebView2 message sent:", message);
+            return true;
+          }
+          log("WebView2 bridge not available");
+        } catch (error) {
+          console.error("[SP] WebView2 send error:", error);
+        }
+
+        try {
+          window.postMessage({ type: message, trackId: trackId }, "*");
+          log("Browser postMessage sent:", message);
+        } catch (error) {
+          console.error("[SP] Browser postMessage failed:", error);
+        }
+
+        return false;
+      }
+
+      function notifyVideoEnded() {
+        if (endedSent) {
+          console.log("[SP] videoEnded already processed");
+          return;
+        }
+        endedSent = true;
+
+        console.log("================================");
+        console.log("[SP] videoEnded");
+        console.log("[SP] Track ID:", trackId);
+        console.log("[SP] Track finished");
+        console.log("[SP] Sending videoEnded...");
+
+        stopPolling();
+        isPlaying = false;
+
+        sendToHost("videoEnded");
+
+        try {
+          window.dispatchEvent(new CustomEvent("videoEnded", {
+            detail: { trackId: trackId, event: "videoEnded" }
+          }));
+          console.log("[SP] Custom videoEnded event dispatched");
+        } catch (error) {
+          console.error("[SP] Custom event failed:", error);
+        }
+
+        console.log("[SP] videoEnded processing completed");
+        console.log("================================");
+      }
+
+      function showError(message) {
+        if (loadingWrap) {
+          loadingWrap.style.display = "none";
+        }
+
+        var existing = document.querySelector(".error");
+        if (existing) {
+          existing.remove();
+        }
+
+        var err = document.createElement("div");
+        err.className = "error";
+
+        var strong = document.createElement("strong");
+        strong.textContent = message || "Failed to load track";
+
+        var small = document.createElement("small");
+        small.textContent = "Check that the trackId is valid.";
+
+        err.appendChild(strong);
+        err.appendChild(small);
+        document.body.appendChild(err);
       }
 
       function fmt(n) {
         if (n == null) return null;
-        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-      }
-
-      function render(track) {
-        document.title = (track.title || 'Spotify') + ' - ' + (track.artist || '');
-        var wrap = document.getElementById('loadingWrap');
-        if (wrap) wrap.style.display = 'none';
-
-        var art = track.thumbnail || '';
-        if (art) document.getElementById('bg').style.backgroundImage = "url('" + art + "')";
-
-        var content = document.getElementById('content');
-
-        var artwork = document.createElement('div');
-        artwork.className = 'artwork';
-        var img = document.createElement('img');
-        img.alt = track.title || '';
-        img.onload = function () { this.classList.add('loaded'); };
-        img.src = art;
-        artwork.appendChild(img);
-        content.appendChild(artwork);
-
-        var info = document.createElement('div');
-        info.className = 'info';
-        var metaBits = [];
-        if (track.album) metaBits.push(track.album);
-        if (track.explicit) metaBits.push('Explicit');
-        if (track.releaseDate) metaBits.push(track.releaseDate);
-        info.innerHTML = '<h1>' + (track.title || 'Unknown') + '</h1>' +
-          '<h2>' + (track.artist || '') + '</h2>';
-        if (metaBits.length) info.innerHTML += '<div class="meta">' + metaBits.join(' &middot; ') + '</div>';
-        var stats = [];
-        if (track.duration) stats.push('&#9201; ' + track.duration);
-        if (track.popularity != null) stats.push('&#128293; ' + track.popularity + ' / 100');
-        if (stats.length) info.innerHTML += '<div class="stats">' + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
-        content.appendChild(info);
-
-        var player = document.createElement('div');
-        player.className = 'player';
-        content.appendChild(player);
-
-        // Prefer a controllable <audio> element (so VB commands work).
-        // Falls back to the Spotify embed when no preview is available.
-        if (track.previewUrl) {
-          audio.src = track.previewUrl;
-          audio.addEventListener('ended', function () {
-            console.log('[SP] ENDED — track finished');
-            if (window.chrome && window.chrome.webview) {
-              window.chrome.webview.postMessage('videoEnded');
-              console.log('[SP] Sent videoEnded to host');
-            }
-          });
-          audio.addEventListener('play', function () { hideHint(); });
-        } else {
-          usingEmbed = true;
-          var iframe = document.createElement('iframe');
-          iframe.id = 'spWidget';
-          iframe.setAttribute('allow', 'autoplay; encrypted-media');
-          iframe.setAttribute('allowtransparency', 'true');
-          iframe.setAttribute('frameborder', '0');
-          iframe.src = 'https://open.spotify.com/embed/track/' + encodeURIComponent(track.trackId) +
-            '?utm_source=generator&theme=0';
-          player.appendChild(iframe);
-        }
-
-        // Controls tetap tersembunyi (hidden) seperti api-soundcloud:
-        // dikendalikan lewat pesan WebView2 dari aplikasi VB, bukan ditampilkan.
-        ensureHint();
-      }
-
-      var hintShown = false;
-      var hintEl = null;
-
-      function hideHint() {
-        if (hintEl) { hintEl.remove(); hintEl = null; hintShown = false; }
+        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
       }
 
       function ensureHint() {
         if (hintShown || hintEl) return;
         hintShown = true;
-        hintEl = document.createElement('div');
-        hintEl.className = 'click-hint';
+        hintEl = document.createElement("div");
+        hintEl.className = "click-hint";
         hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div>';
-        hintEl.addEventListener('click', function () {
-          playSound();
-          hideHint();
+        hintEl.addEventListener("click", function () {
+          playTrack();
+          if (hintEl) {
+            hintEl.remove();
+            hintEl = null;
+          }
         });
         document.body.appendChild(hintEl);
       }
 
-      function playSound() {
-        if (usingEmbed) return;
-        if (audio) audio.play();
+      function render(track) {
+        log("Track loaded:", track);
+
+        endedSent = false;
+        isPlaying = false;
+        trackDurationMs = track.durationMs || 0;
+        document.title = (track.title || "Spotify") + " - " + (track.artist || "");
+
+        if (loadingWrap) {
+          loadingWrap.style.display = "none";
+        }
+
+        var art = track.thumbnail || "";
+        if (art) {
+          document.getElementById("bg").style.backgroundImage = "url('" + art.replace(/'/g, "\\'") + "')";
+        }
+
+        var artwork = document.createElement("div");
+        artwork.className = "artwork";
+
+        var img = document.createElement("img");
+        img.alt = track.title || "";
+        img.onload = function () {
+          this.classList.add("loaded");
+        };
+        if (art) {
+          img.src = art;
+        }
+        artwork.appendChild(img);
+        content.appendChild(artwork);
+
+        var info = document.createElement("div");
+        info.className = "info";
+
+        var metaBits = [];
+        if (track.album) metaBits.push(track.album);
+        if (track.explicit) metaBits.push("Explicit");
+        if (track.releaseDate) metaBits.push(track.releaseDate);
+
+        var title = document.createElement("h1");
+        title.textContent = track.title || "Unknown";
+
+        var artist = document.createElement("h2");
+        artist.textContent = track.artist || "";
+
+        info.appendChild(title);
+        info.appendChild(artist);
+
+        if (metaBits.length) {
+          var meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = metaBits.join(" · ");
+          info.appendChild(meta);
+        }
+
+        var stats = [];
+        if (track.duration) stats.push("⏱ " + track.duration);
+        if (track.popularity != null) stats.push("🔥 " + track.popularity + " / 100");
+
+        if (stats.length) {
+          var statsEl = document.createElement("div");
+          statsEl.className = "stats";
+          stats.forEach(function (text) {
+            var span = document.createElement("span");
+            span.textContent = text;
+            statsEl.appendChild(span);
+          });
+          info.appendChild(statsEl);
+        }
+
+        content.appendChild(info);
+
+        var player = document.createElement("div");
+        player.className = "player";
+        content.appendChild(player);
+
+        if (track.previewUrl && typeof track.previewUrl === "string") {
+          setupAudioPlayer(track.previewUrl);
+        } else {
+          setupSpotifyEmbed(player, track.trackId);
+        }
       }
 
-      function pauseSound() {
-        if (usingEmbed) return;
-        if (audio) audio.pause();
+      function setupAudioPlayer(source) {
+        usingAudio = true;
+        log("Using HTML5 Audio");
+        log("Audio source:", source);
+
+        audio.onended = null;
+        audio.onerror = null;
+        audio.onplay = null;
+        audio.onpause = null;
+
+        audio.src = source;
+        audio.load();
+
+        audio.onplay = function () {
+          log("Audio PLAYING");
+          isPlaying = true;
+          setStatus("playing");
+          trackStartedAt = Date.now();
+          startPolling();
+        };
+
+        audio.onpause = function () {
+          if (!audio.ended) {
+            log("Audio PAUSED");
+            isPlaying = false;
+            setStatus("paused");
+            stopPolling();
+          }
+        };
+
+        audio.onerror = function (event) {
+          console.error("[SP] Audio error:", event, audio.error);
+          setStatus("audio-error");
+        };
+
+        audio.onended = function () {
+          log("HTML5 AUDIO ENDED EVENT FIRED");
+          isPlaying = false;
+          setStatus("ended");
+          stopPolling();
+          notifyVideoEnded();
+        };
+
+        playAudio();
       }
 
-      function replaySound() {
-        if (usingEmbed) return;
-        if (audio) { audio.currentTime = 0; audio.play(); }
+      function playAudio() {
+        if (!audio) {
+          log("Audio element unavailable");
+          return;
+        }
+
+        log("Attempting autoplay...");
+        var promise = audio.play();
+
+        if (promise && typeof promise.then === "function") {
+          promise.then(function () {
+            log("AUTOPLAY SUCCESS");
+            isPlaying = true;
+            setStatus("playing");
+            trackStartedAt = Date.now();
+            startPolling();
+          }).catch(function (error) {
+            console.warn("[SP] Autoplay blocked:", error);
+            setStatus("autoplay-blocked");
+            ensureHint();
+          });
+        }
       }
 
-      function nextSound() {
-        replaySound();
+      function setupSpotifyEmbed(player, id) {
+        usingAudio = false;
+        log("Using Spotify Embed");
+
+        var iframe = document.createElement("iframe");
+        iframe.id = "spWidget";
+        iframe.setAttribute("allow", "autoplay; encrypted-media");
+        iframe.setAttribute("allowtransparency", "true");
+        iframe.setAttribute("frameborder", "0");
+        iframe.src = "https://open.spotify.com/embed/track/" + encodeURIComponent(id) +
+          "?utm_source=generator&theme=0";
+
+        player.appendChild(iframe);
+        log("Spotify Embed created.");
+
+        iframe.onload = function () {
+          log("Spotify Embed loaded");
+          playerReady = true;
+          setStatus("embed_loaded");
+          sendToHost("embed_ready");
+
+          trackStartedAt = Date.now();
+          isPlaying = true;
+
+          setTimeout(function () {
+            startPolling();
+          }, 3000);
+
+          setTimeout(function () {
+            if (!isPlaying && !endedSent) {
+              ensureHint();
+            }
+          }, 5000);
+        };
       }
 
-      // Komunikasi dengan VB (WebView2)
+      function playTrack() {
+        log("Play track triggered");
+
+        if (usingAudio) {
+          endedSent = false;
+          playAudio();
+          return;
+        }
+
+        var iframe = document.getElementById("spWidget");
+        if (iframe) {
+          try {
+            iframe.src = iframe.src;
+            log("Reloaded embed to play");
+            isPlaying = true;
+            trackStartedAt = Date.now();
+            endedSent = false;
+            startPolling();
+            setStatus("playing");
+          } catch (e) {
+            console.error("[SP] Error reloading embed:", e);
+          }
+        }
+      }
+
+      function startPolling() {
+        stopPolling();
+        log("Starting polling for track end");
+
+        if (trackDurationMs > 0) {
+          var checkInterval = 1000;
+          var elapsed = 0;
+
+          pollingInterval = setInterval(function () {
+            if (!isPlaying) {
+              return;
+            }
+
+            elapsed = Date.now() - trackStartedAt;
+
+            if (usingAudio && audio) {
+              if (audio.ended) {
+                log("Audio ended detected in polling");
+                stopPolling();
+                notifyVideoEnded();
+                return;
+              }
+            }
+
+            if (elapsed >= trackDurationMs - 500 && trackDurationMs > 0) {
+              log("Track duration elapsed: " + elapsed + "ms >= " + trackDurationMs + "ms");
+              log("TRACK ENDED DETECTED BY POLLING");
+              stopPolling();
+              isPlaying = false;
+              notifyVideoEnded();
+              return;
+            }
+
+            if (usingAudio && audio && audio.currentTime > 0) {
+              setStatus("playing " + Math.floor(audio.currentTime) + "s / " + Math.floor(audio.duration) +
+                "s");
+            } else {
+              var remaining = Math.max(0, Math.floor((trackDurationMs - elapsed) / 1000));
+              setStatus("playing " + Math.floor(elapsed / 1000) + "s / " + Math.floor(trackDurationMs / 1000) +
+                "s");
+            }
+          }, checkInterval);
+        } else {
+          log("Warning: No track duration available, using fallback detection");
+
+          if (usingAudio) {
+            pollingInterval = setInterval(function () {
+              if (audio && audio.ended) {
+                stopPolling();
+                notifyVideoEnded();
+                return;
+              }
+              if (audio && audio.currentTime > 0 && audio.currentTime >= audio.duration - 0.5) {
+                stopPolling();
+                notifyVideoEnded();
+              }
+            }, 500);
+          } else {
+            pollingInterval = setInterval(function () {
+              if (!isPlaying) return;
+              var elapsed = Date.now() - trackStartedAt;
+              if (elapsed > 180000) {
+                log("Fallback timeout reached (3 minutes)");
+                stopPolling();
+                isPlaying = false;
+                notifyVideoEnded();
+              }
+            }, 5000);
+          }
+        }
+
+        var safetyTimeout = Math.max(trackDurationMs || 180000, 180000) + 10000;
+        setTimeout(function () {
+          if (pollingInterval && !endedSent) {
+            log("Safety timeout reached - sending end");
+            stopPolling();
+            if (!endedSent) {
+              notifyVideoEnded();
+            }
+          }
+        }, safetyTimeout);
+      }
+
+      function stopPolling() {
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          pollingInterval = null;
+          log("Polling stopped");
+        }
+      }
+
+      function handleHostCommand(data) {
+        log("Host command:", data);
+
+        if (data === "play") {
+          endedSent = false;
+          if (usingAudio) {
+            playAudio();
+          } else {
+            playTrack();
+          }
+          return;
+        }
+
+        if (data === "pause") {
+          if (usingAudio) {
+            audio.pause();
+          } else {
+            var iframe = document.getElementById("spWidget");
+            if (iframe) {
+              try {
+                var currentSrc = iframe.src;
+                iframe.src = "";
+                iframe.src = currentSrc;
+                isPlaying = false;
+                stopPolling();
+                setStatus("paused");
+                log("Embed paused (reloaded)");
+              } catch (e) {
+                console.error("[SP] Error pausing embed:", e);
+              }
+            }
+          }
+          return;
+        }
+
+        if (data === "replay" || data === "next") {
+          endedSent = false;
+          if (usingAudio) {
+            try {
+              audio.currentTime = 0;
+            } catch (e) { }
+            playAudio();
+          } else {
+            playTrack();
+          }
+          return;
+        }
+      }
+
       if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.addEventListener('message', function (event) {
-          var data = event.data;
-          if (data === 'pause') pauseSound();
-          if (data === 'play') playSound();
-          if (data === 'replay') replaySound();
-          if (data === 'next') nextSound();
+        log("WebView2 bridge detected.");
+        window.chrome.webview.addEventListener("message", function (event) {
+          handleHostCommand(event.data);
         });
+      } else {
+        log("WebView2 bridge NOT detected.");
       }
 
-      document.getElementById('btnPlay').addEventListener('click', playSound);
-      document.getElementById('btnPrev').addEventListener('click', pauseSound);
-      document.getElementById('btnReplay').addEventListener('click', replaySound);
-      document.getElementById('btnNext').addEventListener('click', nextSound);
+      function loadTrack() {
+        if (!trackId) {
+          showError("Missing trackId parameter");
+          return;
+        }
 
-      if (!trackId) {
-        showError('Missing trackId parameter');
-        return;
+        log("Loading track:", trackId);
+        setStatus("loading");
+
+        fetch("/track?trackId=" + encodeURIComponent(trackId))
+          .then(function (res) {
+            if (!res.ok) {
+              throw new Error("Track not found (HTTP " + res.status + ")");
+            }
+            return res.json();
+          })
+          .then(function (track) {
+            log("Track API response:", track);
+            render(track);
+          })
+          .catch(function (error) {
+            console.error("[SP] Load error:", error);
+            showError(error.message || "Failed to load track");
+          });
       }
 
-      fetch('/track?trackId=' + encodeURIComponent(trackId))
-        .then(function (res) {
-          if (!res.ok) throw new Error('Track not found (HTTP ' + res.status + ')');
-          return res.json();
-        })
-        .then(render)
-        .catch(function (e) { showError(e.message); });
+      window.addEventListener("beforeunload", function () {
+        stopPolling();
+      });
+
+      loadTrack();
     })();
   </script>
+
 </body>
 
 </html>
