@@ -1,885 +1,315 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Spotify Player</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:100%;height:100%}
+    body{
+      overflow:hidden;
+      background:#000;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+      -webkit-font-smoothing:antialiased;
+      display:flex;align-items:center;justify-content:center;
     }
-
-    html,
-    body {
-      width: 100%;
-      height: 100%;
+    .bg{position:fixed;inset:-80px;z-index:0;background-size:cover;background-position:center;filter:blur(80px) brightness(.35) saturate(1.3);transform:scale(1.15);transition:background-image .6s ease}
+    .bg-overlay{position:fixed;inset:0;z-index:1;background:radial-gradient(ellipse at center,rgba(0,0,0,.15) 0%,rgba(0,0,0,.65) 100%)}
+    .content{
+      position:relative;z-index:2;width:min(1120px,calc(100% - 48px));height:min(540px,calc(100vh - 48px));
+      display:grid;grid-template-columns:min(46vw,500px) minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;
+      align-content:center;align-items:stretch;justify-content:center;column-gap:clamp(30px,4vw,64px);margin:auto
     }
-
-    body {
-      overflow: hidden;
-      background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      -webkit-font-smoothing: antialiased;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    .artwork{grid-column:1;grid-row:1 / span 2;width:100%;height:100%;min-width:0;min-height:0;justify-self:stretch;align-self:stretch;border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6);background:rgba(255,255,255,.06)}
+    .artwork img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .4s ease}
+    .artwork img.loaded{opacity:1}
+    .info{grid-column:2;grid-row:1;text-align:left;width:100%;min-width:0;align-self:start;padding-top:4px;overflow:hidden}
+    .info h1{color:#fff;font-size:clamp(24px,4vw,36px);font-weight:700;white-space:nowrap;display:inline-block;padding-left:100%;animation:scrollText 12s linear infinite}
+    @keyframes scrollText{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
+    .info h2{color:rgba(255,255,255,.7);font-size:clamp(14px,2vw,18px);margin-top:6px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .info .meta{color:rgba(255,255,255,.5);font-size:13px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .info .stats{color:rgba(255,255,255,.45);font-size:13px;margin-top:16px;display:flex;gap:18px;justify-content:flex-start;flex-wrap:wrap}
+    .player{
+      grid-column:2;grid-row:2;width:100%;max-width:none;border-radius:16px;overflow:hidden;
+      box-shadow:0 16px 48px rgba(0,0,0,.5);align-self:end;background:rgba(20,20,20,.92);
+      border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(16px);
+      min-height:166px;display:flex;flex-direction:column
     }
-
-    .bg {
-      position: fixed;
-      inset: -80px;
-      z-index: 0;
-      background-size: cover;
-      background-position: center;
-      filter: blur(80px) brightness(.35) saturate(1.3);
-      transform: scale(1.15);
-      transition: background-image .6s ease;
-    }
-
-    .bg-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 1;
-      background: radial-gradient(ellipse at center, rgba(0, 0, 0, .15) 0%, rgba(0, 0, 0, .65) 100%);
-    }
-
-    .content {
-      position: relative;
-      z-index: 2;
-      width: min(1120px, calc(100% - 48px));
-      height: min(500px, calc(100vh - 48px));
-      display: grid;
-      grid-template-columns: min(46vw, 500px) minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr) 166px;
-      align-content: center;
-      align-items: stretch;
-      justify-content: center;
-      column-gap: clamp(30px, 4vw, 64px);
-      margin: auto;
-    }
-
-    .artwork {
-      grid-column: 1;
-      grid-row: 1 / span 2;
-      width: 100%;
-      height: 100%;
-      min-width: 0;
-      min-height: 0;
-      justify-self: stretch;
-      align-self: stretch;
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
-      background: rgba(255, 255, 255, .06);
-    }
-
-    .artwork img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-      opacity: 0;
-      transition: opacity .4s ease;
-    }
-
-    .artwork img.loaded {
-      opacity: 1;
-    }
-
-    .info {
-      grid-column: 2;
-      grid-row: 1;
-      text-align: left;
-      width: 100%;
-      min-width: 0;
-      align-self: start;
-      padding-top: 4px;
-      overflow: hidden;
-    }
-
-    .info h1 {
-      color: #fff;
-      font-size: clamp(24px, 4vw, 36px);
-      font-weight: 700;
-      white-space: nowrap;
-      display: inline-block;
-      padding-left: 100%;
-      animation: scrollText 12s linear infinite;
-    }
-
-    @keyframes scrollText {
-      0% {
-        transform: translateX(0);
-      }
-
-      100% {
-        transform: translateX(-100%);
-      }
-    }
-
-    .info h2 {
-      color: rgba(255, 255, 255, .7);
-      font-size: clamp(14px, 2vw, 18px);
-      margin-top: 6px;
-      font-weight: 500;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .info .meta {
-      color: rgba(255, 255, 255, .5);
-      font-size: 13px;
-      margin-top: 6px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .info .stats {
-      color: rgba(255, 255, 255, .45);
-      font-size: 13px;
-      margin-top: 16px;
-      display: flex;
-      gap: 18px;
-      justify-content: flex-start;
-      flex-wrap: wrap;
-    }
-
-    .player {
-      grid-column: 2;
-      grid-row: 2;
-      width: 100%;
-      height: 166px;
-      max-width: none;
-      border-radius: 14px;
-      overflow: hidden;
-      box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
-      align-self: end;
-      background: rgba(0, 0, 0, .2);
-    }
-
-    .player iframe {
-      width: 100%;
-      height: 100%;
-      border: 0;
-      display: block;
-      background: #181818;
-    }
-
-    #audio {
-      display: none;
-    }
-
-    #loadingWrap {
-      position: fixed;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 50;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .spinner {
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      border: 3px solid rgba(255, 255, 255, .15);
-      border-top-color: #1db954;
-      animation: spin .8s linear infinite;
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
-    .loading {
-      color: rgba(255, 255, 255, .8);
-      font-size: 14px;
-      letter-spacing: .5px;
-    }
-
-    .error {
-      position: fixed;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 50;
-      color: #fff;
-      font-size: 16px;
-      text-align: center;
-      max-width: 480px;
-      padding: 20px;
-    }
-
-    .error small {
-      display: block;
-      margin-top: 10px;
-      color: rgba(255, 255, 255, .5);
-      font-size: 12px;
-    }
-
-    #status {
-      position: fixed;
-      left: 10px;
-      bottom: 10px;
-      z-index: 100;
-      padding: 6px 10px;
-      border-radius: 6px;
-      background: rgba(0, 0, 0, .7);
-      color: rgba(255, 255, 255, .5);
-      font-size: 10px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity .2s ease;
-    }
-
-    .click-hint {
-      position: fixed;
-      inset: 0;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0, 0, 0, .65);
-      color: #fff;
-      cursor: pointer;
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: .5px;
-    }
-
-    .click-hint .play-ico {
-      width: 84px;
-      height: 84px;
-      border-radius: 50%;
-      background: #1db954;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 20px;
-      box-shadow: 0 12px 40px rgba(29, 185, 84, .5);
-    }
-
-    .click-hint .play-ico::after {
-      content: "";
-      display: block;
-      width: 0;
-      height: 0;
-      border-left: 26px solid #fff;
-      border-top: 16px solid transparent;
-      border-bottom: 16px solid transparent;
-      margin-left: 6px;
-    }
-
-    @media (max-width:760px) {
-      body {
-        overflow: auto;
-      }
-
-      .content {
-        width: 100%;
-        height: auto;
-        min-height: 100%;
-        display: grid;
-        grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
-        align-content: center;
-        justify-items: center;
-        align-items: center;
-        row-gap: 28px;
-        padding: 24px 18px;
-        overflow: auto;
-      }
-
-      .artwork {
-        grid-column: 1;
-        grid-row: 1;
-        width: min(78vw, 360px);
-        height: auto;
-        aspect-ratio: 1;
-        justify-self: center;
-        align-self: auto;
-      }
-
-      .info {
-        grid-column: 1;
-        grid-row: 2;
-        text-align: center;
-        width: 100%;
-        padding-top: 0;
-        align-self: auto;
-      }
-
-      .info .stats {
-        justify-content: center;
-      }
-
-      .player {
-        grid-column: 1;
-        grid-row: 3;
-        width: 100%;
-        height: 166px;
-        align-self: auto;
-      }
+    .player iframe{width:100%;height:166px;border:0;display:block;background:#181818}
+    .audio-card{padding:16px;display:flex;flex-direction:column;gap:12px}
+    .audio-top{display:flex;align-items:center;gap:14px}
+    .play-btn{width:48px;height:48px;border-radius:50%;background:#1db954;border:0;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;box-shadow:0 8px 24px rgba(29,185,84,.45);transition:transform .15s ease,filter .15s ease}
+    .play-btn:hover{transform:scale(1.06);filter:brightness(1.08)}
+    .play-btn:active{transform:scale(.96)}
+    .play-btn svg{margin-left:2px}
+    .play-btn.playing{background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+    .play-btn.playing svg path{fill:#000}
+    .audio-meta{flex:1;min-width:0}
+    .audio-meta .t{color:#fff;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
+    .audio-meta .a{color:rgba(255,255,255,.55);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+    .audio-meta .src{color:rgba(255,255,255,.35);font-size:10px;margin-top:4px;letter-spacing:.4px}
+    .time-row{display:flex;align-items:center;gap:10px;color:rgba(255,255,255,.55);font-size:11px;font-variant-numeric:tabular-nums}
+    .progress-wrap{flex:1;height:4px;background:rgba(255,255,255,.15);border-radius:999px;overflow:hidden;cursor:pointer;position:relative}
+    .progress-bar{height:100%;width:0%;background:#1db954;border-radius:999px;transition:width .1s linear;position:relative}
+    .progress-bar::after{content:"";position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.4);opacity:0;transition:opacity .15s}
+    .progress-wrap:hover .progress-bar::after{opacity:1}
+    .vol-row{display:flex;align-items:center;gap:8px;margin-top:2px}
+    .vol-row input[type=range]{flex:1;accent-color:#1db954;height:3px}
+    .audio-card .hint{font-size:10px;color:rgba(255,255,255,.35);text-align:center;letter-spacing:.3px}
+    #audio{display:none}
+    .error{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;color:#fff;font-size:16px;text-align:center;max-width:480px;padding:20px}
+    .error small{display:block;margin-top:10px;color:rgba(255,255,255,.5);font-size:12px}
+    #status{position:fixed;left:10px;bottom:10px;z-index:100;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.7);color:rgba(255,255,255,.55);font-size:10px;pointer-events:none;opacity:0;transition:opacity .2s ease;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #status.show{opacity:1}
+    .click-hint{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.65);color:#fff;cursor:pointer;font-size:20px;font-weight:600;letter-spacing:.5px;backdrop-filter:blur(6px)}
+    .click-hint .play-ico{width:84px;height:84px;border-radius:50%;background:#1db954;display:flex;align-items:center;justify-content:center;margin-bottom:20px;box-shadow:0 12px 40px rgba(29,185,84,.5)}
+    .click-hint .play-ico::after{content:"";display:block;width:0;height:0;border-left:26px solid #fff;border-top:16px solid transparent;border-bottom:16px solid transparent;margin-left:6px}
+    @media (max-width:760px){
+      body{overflow:auto}
+      .content{width:100%;height:auto;min-height:100%;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto auto;align-content:center;justify-items:center;align-items:center;row-gap:28px;padding:24px 18px;overflow:auto}
+      .artwork{grid-column:1;grid-row:1;width:min(78vw,360px);height:auto;aspect-ratio:1;justify-self:center;align-self:auto}
+      .info{grid-column:1;grid-row:2;text-align:center;width:100%;padding-top:0;align-self:auto}
+      .info .stats{justify-content:center}
+      .player{grid-column:1;grid-row:3;width:100%;align-self:auto}
     }
   </style>
 </head>
-
 <body>
-
   <div class="bg" id="bg"></div>
   <div class="bg-overlay"></div>
-
-  <div class="content" id="content">
-    <div id="loadingWrap">
-      <div class="spinner"></div>
-      <div class="loading">Loading track...</div>
-    </div>
-  </div>
-
-  <audio id="audio" preload="auto"></audio>
+  <div class="content" id="content"></div>
+  <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
   <div id="status"></div>
 
   <script>
-    (function () {
+    (function(){
       "use strict";
+      var params=new URLSearchParams(window.location.search);
+      var trackId=params.get("trackId");
+      var audio=document.getElementById("audio");
+      var content=document.getElementById("content");
+      var statusEl=document.getElementById("status");
 
-      var params = new URLSearchParams(window.location.search);
-      var trackId = params.get("trackId");
+      var usingAudio=false, endedSent=false, trackDurationMs=0, trackStartedAt=0, pollingInterval=null, isPlaying=false;
+      var hintEl=null, hintShown=false, playerEl=null, progressBar=null, curTimeEl=null, durTimeEl=null, playBtn=null;
+      var metaTrack=null;
 
-      var audio = document.getElementById("audio");
-      var content = document.getElementById("content");
-      var loadingWrap = document.getElementById("loadingWrap");
-      var statusEl = document.getElementById("status");
-
-      var usingAudio = false;
-      var endedSent = false;
-      var playerReady = false;
-      var trackDurationMs = 0;
-      var trackStartedAt = 0;
-      var pollingInterval = null;
-      var isPlaying = false;
-      var hintEl = null;
-      var hintShown = false;
-
-      function log() {
-        var args = Array.prototype.slice.call(arguments);
-        args.unshift("[SP]");
-        console.log.apply(console, args);
+      function log(){var a=Array.prototype.slice.call(arguments);a.unshift("[SP]");console.log.apply(console,a)}
+      function setStatus(m, show){
+        if(!statusEl) return;
+        statusEl.textContent=m||"";
+        if(m) { statusEl.classList.add("show"); if(show!==false) setTimeout(function(){statusEl.classList.remove("show")}, 3200); }
+        else statusEl.classList.remove("show");
       }
-
-      function setStatus(message) {
-        if (statusEl) {
-          statusEl.textContent = message || "";
-        }
-      }
-
-      function sendToHost(message) {
-        log("Sending message:", message);
-        try {
-          if (window.chrome && window.chrome.webview) {
+      function sendToHost(message){
+        log("Sending message:",message);
+        try{
+          if(window.chrome && window.chrome.webview){
             window.chrome.webview.postMessage(message);
-            log("WebView2 message sent:", message);
             return true;
           }
-          log("WebView2 bridge not available");
-        } catch (error) {
-          console.error("[SP] WebView2 send error:", error);
-        }
-
-        try {
-          window.postMessage({ type: message, trackId: trackId }, "*");
-          log("Browser postMessage sent:", message);
-        } catch (error) {
-          console.error("[SP] Browser postMessage failed:", error);
-        }
-
+        }catch(e){console.error(e)}
+        try{ window.postMessage({type:message,trackId:trackId},"*"); }catch(e){}
         return false;
       }
-
-      function notifyVideoEnded() {
-        if (endedSent) {
-          console.log("[SP] videoEnded already processed");
-          return;
-        }
-        endedSent = true;
-
-        console.log("================================");
-        console.log("[SP] videoEnded");
-        console.log("[SP] Track ID:", trackId);
-        console.log("[SP] Track finished");
-        console.log("[SP] Sending videoEnded...");
-
-        stopPolling();
-        isPlaying = false;
-
+      function notifyVideoEnded(){
+        if(endedSent) return;
+        endedSent=true;
+        stopPolling(); isPlaying=false; if(playBtn) playBtn.classList.remove("playing");
         sendToHost("videoEnded");
-
-        try {
-          window.dispatchEvent(new CustomEvent("videoEnded", {
-            detail: { trackId: trackId, event: "videoEnded" }
-          }));
-          console.log("[SP] Custom videoEnded event dispatched");
-        } catch (error) {
-          console.error("[SP] Custom event failed:", error);
-        }
-
-        console.log("[SP] videoEnded processing completed");
-        console.log("================================");
+        try{ window.dispatchEvent(new CustomEvent("videoEnded",{detail:{trackId:trackId,event:"videoEnded"}})); }catch(e){}
       }
-
-      function showError(message) {
-        if (loadingWrap) {
-          loadingWrap.style.display = "none";
-        }
-
-        var existing = document.querySelector(".error");
-        if (existing) {
-          existing.remove();
-        }
-
-        var err = document.createElement("div");
-        err.className = "error";
-
-        var strong = document.createElement("strong");
-        strong.textContent = message || "Failed to load track";
-
-        var small = document.createElement("small");
-        small.textContent = "Check that the trackId is valid.";
-
-        err.appendChild(strong);
-        err.appendChild(small);
-        document.body.appendChild(err);
+      function showError(message){
+        var ex=document.querySelector(".error"); if(ex) ex.remove();
+        var err=document.createElement("div"); err.className="error";
+        var strong=document.createElement("strong"); strong.textContent=message||"Failed to load track";
+        var small=document.createElement("small"); small.textContent="Check that the trackId is valid.";
+        err.appendChild(strong); err.appendChild(small); document.body.appendChild(err);
       }
-
-      function fmt(n) {
-        if (n == null) return null;
-        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      function fmtTime(sec){
+        if(!isFinite(sec)||sec<0) sec=0;
+        sec=Math.floor(sec);
+        var h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+        if(h) return h+":"+(m<10?"0":"")+m+":"+(s<10?"0":"")+s;
+        return m+":"+(s<10?"0":"")+s;
       }
-
-      function ensureHint() {
-        if (hintShown || hintEl) return;
-        hintShown = true;
-        hintEl = document.createElement("div");
-        hintEl.className = "click-hint";
-        hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div>';
-        hintEl.addEventListener("click", function () {
-          playTrack();
-          if (hintEl) {
-            hintEl.remove();
-            hintEl = null;
-          }
-        });
+      function ensureHint(){
+        if(hintShown||hintEl) return;
+        hintShown=true;
+        hintEl=document.createElement("div"); hintEl.className="click-hint";
+        hintEl.innerHTML='<div class="play-ico"></div><div>Click to play</div><div style="margin-top:8px;font-size:12px;opacity:.6">Autoplay blocked</div>';
+        hintEl.addEventListener("click",function(){ playTrack(); if(hintEl){hintEl.remove();hintEl=null;} });
         document.body.appendChild(hintEl);
       }
 
-      function render(track) {
-        log("Track loaded:", track);
-
-        endedSent = false;
-        isPlaying = false;
-        trackDurationMs = track.durationMs || 0;
-        document.title = (track.title || "Spotify") + " - " + (track.artist || "");
-
-        if (loadingWrap) {
-          loadingWrap.style.display = "none";
-        }
-
-        var art = track.thumbnail || "";
-        if (art) {
-          document.getElementById("bg").style.backgroundImage = "url('" + art.replace(/'/g, "\\'") + "')";
-        }
-
-        var artwork = document.createElement("div");
-        artwork.className = "artwork";
-
-        var img = document.createElement("img");
-        img.alt = track.title || "";
-        img.onload = function () {
-          this.classList.add("loaded");
-        };
-        if (art) {
-          img.src = art;
-        }
-        artwork.appendChild(img);
+      function createSkeleton(){
+        // artwork placeholder
+        var artwork=document.createElement("div"); artwork.className="artwork"; artwork.id="artwork";
         content.appendChild(artwork);
-
-        var info = document.createElement("div");
-        info.className = "info";
-
-        var metaBits = [];
-        if (track.album) metaBits.push(track.album);
-        if (track.explicit) metaBits.push("Explicit");
-        if (track.releaseDate) metaBits.push(track.releaseDate);
-
-        var title = document.createElement("h1");
-        title.textContent = track.title || "Unknown";
-
-        var artist = document.createElement("h2");
-        artist.textContent = track.artist || "";
-
-        info.appendChild(title);
-        info.appendChild(artist);
-
-        if (metaBits.length) {
-          var meta = document.createElement("div");
-          meta.className = "meta";
-          meta.textContent = metaBits.join(" · ");
-          info.appendChild(meta);
-        }
-
-        var stats = [];
-        if (track.duration) stats.push("⏱ " + track.duration);
-        if (track.popularity != null) stats.push("🔥 " + track.popularity + " / 100");
-
-        if (stats.length) {
-          var statsEl = document.createElement("div");
-          statsEl.className = "stats";
-          stats.forEach(function (text) {
-            var span = document.createElement("span");
-            span.textContent = text;
-            statsEl.appendChild(span);
-          });
-          info.appendChild(statsEl);
-        }
-
+        // info placeholder
+        var info=document.createElement("div"); info.className="info"; info.id="info";
+        var title=document.createElement("h1"); title.id="skeletonTitle"; title.textContent="\u00A0";
+        var artist=document.createElement("h2"); artist.id="skeletonArtist"; artist.textContent="\u00A0";
+        info.appendChild(title); info.appendChild(artist);
         content.appendChild(info);
+        // player iframe instantly — fastest load, no spinner, no resolving text
+        playerEl=document.createElement("div"); playerEl.className="player"; playerEl.id="player";
+        var iframe=document.createElement("iframe");
+        iframe.id="spWidget";
+        iframe.setAttribute("allow","autoplay; encrypted-media; fullscreen");
+        iframe.setAttribute("allowtransparency","true");
+        iframe.setAttribute("frameborder","0");
+        iframe.setAttribute("loading","eager");
+        iframe.src="/embed-proxy?trackId="+encodeURIComponent(trackId);
+        playerEl.appendChild(iframe);
+        content.appendChild(playerEl);
+        log("Embed iframe injected instantly: "+iframe.src);
+        iframe.onload=function(){
+          log("Spotify Embed loaded");
+          setStatus("playing");
+          sendToHost("embed_ready");
+          trackStartedAt=Date.now(); isPlaying=true;
+          setTimeout(function(){startPolling()},1500);
+        };
+        iframe.onerror=function(e){ console.error("[SP] Embed error", e); };
+      }
 
-        var player = document.createElement("div");
-        player.className = "player";
-        content.appendChild(player);
-
-        if (track.previewUrl && typeof track.previewUrl === "string") {
-          setupAudioPlayer(track.previewUrl);
-        } else {
-          setupSpotifyEmbed(player, track.trackId);
+      function updateMeta(track){
+        metaTrack=track;
+        endedSent=false; isPlaying=false; trackDurationMs=track.durationMs||0;
+        document.title=(track.title||"Spotify")+" – "+(track.artist||"");
+        var art=track.thumbnail||"";
+        if(art) document.getElementById("bg").style.backgroundImage="url('"+art.replace(/'/g,"\\'")+"')";
+        // artwork image
+        var artwork=document.getElementById("artwork");
+        if(artwork){
+          artwork.innerHTML="";
+          var img=document.createElement("img"); img.alt=track.title||""; img.onload=function(){this.classList.add("loaded")}; if(art) img.src=art;
+          artwork.appendChild(img);
+        }
+        // info
+        var titleEl=document.getElementById("skeletonTitle");
+        var artistEl=document.getElementById("skeletonArtist");
+        if(titleEl) titleEl.textContent=track.title||"Unknown";
+        if(artistEl) artistEl.textContent=track.artist||"";
+        var info=document.getElementById("info");
+        if(info){
+          // meta + stats (no badges)
+          var metaBits=[]; if(track.album) metaBits.push(track.album); if(track.explicit) metaBits.push("Explicit"); if(track.releaseDate) metaBits.push(track.releaseDate);
+          // remove old meta/stats if exist
+          var oldMeta=info.querySelector(".meta"); if(oldMeta) oldMeta.remove();
+          var oldStats=info.querySelector(".stats"); if(oldStats) oldStats.remove();
+          if(metaBits.length){var meta=document.createElement("div"); meta.className="meta"; meta.textContent=metaBits.join(" · "); info.appendChild(meta);}
+          var stats=[]; if(track.duration) stats.push("⏱ "+track.duration);
+          if(stats.length){var statsEl=document.createElement("div"); statsEl.className="stats"; stats.forEach(function(t){var s=document.createElement("span");s.textContent=t;statsEl.appendChild(s)}); info.appendChild(statsEl);}
+        }
+        if(trackDurationMs && pollingInterval==null && isPlaying){
+          startPolling();
         }
       }
 
-      function setupAudioPlayer(source) {
-        usingAudio = true;
-        log("Using HTML5 Audio");
-        log("Audio source:", source);
-
-        audio.onended = null;
-        audio.onerror = null;
-        audio.onplay = null;
-        audio.onpause = null;
-
-        audio.src = source;
-        audio.load();
-
-        audio.onplay = function () {
-          log("Audio PLAYING");
-          isPlaying = true;
-          setStatus("playing");
-          trackStartedAt = Date.now();
-          startPolling();
-        };
-
-        audio.onpause = function () {
-          if (!audio.ended) {
-            log("Audio PAUSED");
-            isPlaying = false;
-            setStatus("paused");
-            stopPolling();
-          }
-        };
-
-        audio.onerror = function (event) {
-          console.error("[SP] Audio error:", event, audio.error);
-          setStatus("audio-error");
-        };
-
-        audio.onended = function () {
-          log("HTML5 AUDIO ENDED EVENT FIRED");
-          isPlaying = false;
-          setStatus("ended");
-          stopPolling();
-          notifyVideoEnded();
-        };
-
+      function setupAudioPlayer(proxyUrl, directUrl, info){
+        usingAudio=true;
+        playerEl.innerHTML="";
+        var card=document.createElement("div"); card.className="audio-card";
+        card.innerHTML=
+          '<div class="audio-top">'+
+            '<button class="play-btn" id="playBtn" aria-label="play"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5.14v14l11-7-11-7z" fill="#fff"/></svg></button>'+
+            '<div class="audio-meta"><div class="t" id="audioTitle"></div><div class="a" id="audioArtist"></div></div>'+
+          '</div>'+
+          '<div class="time-row"><span id="curTime">0:00</span><div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div><span id="durTime">0:00</span></div>'+
+          '<div class="vol-row" style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:rgba(255,255,255,.45)">Vol</span><input id="volRange" type="range" min="0" max="1" step="0.01" value="0.9"><span id="volLabel" style="font-size:11px;color:rgba(255,255,255,.5)">90%</span></div>';
+        playerEl.appendChild(card);
+        playBtn=document.getElementById("playBtn");
+        progressBar=document.getElementById("progressBar");
+        curTimeEl=document.getElementById("curTime");
+        durTimeEl=document.getElementById("durTime");
+        var progressWrap=document.getElementById("progressWrap");
+        var volRange=document.getElementById("volRange");
+        var volLabel=document.getElementById("volLabel");
+        document.getElementById("audioTitle").textContent= (metaTrack && metaTrack.title) || (info && info.title) || "Full audio";
+        document.getElementById("audioArtist").textContent= (metaTrack && metaTrack.artist) || (info && info.artist) || "";
+        if(durTimeEl && trackDurationMs) durTimeEl.textContent=fmtTime(trackDurationMs/1000);
+        audio.onended=null; audio.onerror=null; audio.onplay=null; audio.onpause=null; audio.ontimeupdate=null; audio.onloadedmetadata=null;
+        audio.src=proxyUrl; audio.preload="auto"; audio.crossOrigin="anonymous"; audio.volume=parseFloat(volRange.value);
+        audio.onloadedmetadata=function(){ var d=audio.duration; if(isFinite(d)){ trackDurationMs=d*1000; durTimeEl.textContent=fmtTime(d);} };
+        audio.onplay=function(){ isPlaying=true; if(playBtn){playBtn.classList.add("playing"); playBtn.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="#000"/></svg>';} trackStartedAt=Date.now() - ((audio.currentTime||0)*1000); startPolling(); };
+        audio.onpause=function(){ if(!audio.ended){ isPlaying=false; stopPolling(); if(playBtn){playBtn.classList.remove("playing"); playBtn.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5.14v14l11-7-11-7z" fill="#fff"/></svg>';} } };
+        audio.onerror=function(e){ console.error(e); if(directUrl && audio.src!==directUrl){ audio.src=directUrl; audio.load(); playAudio(); } };
+        audio.onended=function(){ isPlaying=false; stopPolling(); if(progressBar) progressBar.style.width="100%"; notifyVideoEnded(); };
+        audio.ontimeupdate=function(){ if(!curTimeEl||!progressBar) return; var cur=audio.currentTime||0, dur=audio.duration|| (trackDurationMs/1000) || 0; curTimeEl.textContent=fmtTime(cur); if(dur){ durTimeEl.textContent=fmtTime(dur); var pct=(cur/dur)*100; progressBar.style.width=pct+"%"; } };
+        progressWrap.addEventListener("click", function(e){ var rect=progressWrap.getBoundingClientRect(); var x=e.clientX - rect.left; var pct=x/rect.width; var dur=audio.duration || (trackDurationMs/1000); if(dur && isFinite(dur)){ audio.currentTime=pct*dur; } });
+        playBtn.addEventListener("click", function(){ if(audio.paused){ playAudio(); } else { audio.pause(); } });
+        volRange.addEventListener("input", function(){ var v=parseFloat(this.value); audio.volume=v; volLabel.textContent=Math.round(v*100)+"%"; });
         playAudio();
       }
 
-      function playAudio() {
-        if (!audio) {
-          log("Audio element unavailable");
-          return;
-        }
-
-        log("Attempting autoplay...");
-        var promise = audio.play();
-
-        if (promise && typeof promise.then === "function") {
-          promise.then(function () {
-            log("AUTOPLAY SUCCESS");
-            isPlaying = true;
-            setStatus("playing");
-            trackStartedAt = Date.now();
-            startPolling();
-          }).catch(function (error) {
-            console.warn("[SP] Autoplay blocked:", error);
-            setStatus("autoplay-blocked");
-            ensureHint();
-          });
+      function playAudio(){
+        if(!audio) return;
+        var p=audio.play();
+        if(p && typeof p.then==="function"){
+          p.then(function(){ isPlaying=true; trackStartedAt=Date.now() - ((audio.currentTime||0)*1000); startPolling(); if(hintEl){hintEl.remove();hintEl=null} }).catch(function(err){ ensureHint(); });
         }
       }
 
-      function setupSpotifyEmbed(player, id) {
-        usingAudio = false;
-        log("Using Spotify Embed");
-
-        var iframe = document.createElement("iframe");
-        iframe.id = "spWidget";
-        iframe.setAttribute("allow", "autoplay; encrypted-media");
-        iframe.setAttribute("allowtransparency", "true");
-        iframe.setAttribute("frameborder", "0");
-        iframe.src = "https://open.spotify.com/embed/track/" + encodeURIComponent(id) +
-          "?utm_source=generator&theme=0";
-
-        player.appendChild(iframe);
-        log("Spotify Embed created.");
-
-        iframe.onload = function () {
-          log("Spotify Embed loaded");
-          playerReady = true;
-          setStatus("embed_loaded");
-          sendToHost("embed_ready");
-
-          trackStartedAt = Date.now();
-          isPlaying = true;
-
-          setTimeout(function () {
-            startPolling();
-          }, 3000);
-
-          setTimeout(function () {
-            if (!isPlaying && !endedSent) {
-              ensureHint();
-            }
-          }, 5000);
-        };
+      function playTrack(){
+        if(usingAudio){ endedSent=false; playAudio(); return; }
+        var iframe=document.getElementById("spWidget");
+        if(iframe){ try{ iframe.src=iframe.src; isPlaying=true; trackStartedAt=Date.now(); endedSent=false; startPolling(); }catch(e){} }
       }
 
-      function playTrack() {
-        log("Play track triggered");
-
-        if (usingAudio) {
-          endedSent = false;
-          playAudio();
-          return;
-        }
-
-        var iframe = document.getElementById("spWidget");
-        if (iframe) {
-          try {
-            iframe.src = iframe.src;
-            log("Reloaded embed to play");
-            isPlaying = true;
-            trackStartedAt = Date.now();
-            endedSent = false;
-            startPolling();
-            setStatus("playing");
-          } catch (e) {
-            console.error("[SP] Error reloading embed:", e);
-          }
-        }
-      }
-
-      function startPolling() {
+      function startPolling(){
         stopPolling();
-        log("Starting polling for track end");
-
-        if (trackDurationMs > 0) {
-          var checkInterval = 1000;
-          var elapsed = 0;
-
-          pollingInterval = setInterval(function () {
-            if (!isPlaying) {
-              return;
-            }
-
-            elapsed = Date.now() - trackStartedAt;
-
-            if (usingAudio && audio) {
-              if (audio.ended) {
-                log("Audio ended detected in polling");
-                stopPolling();
-                notifyVideoEnded();
-                return;
-              }
-            }
-
-            if (elapsed >= trackDurationMs - 500 && trackDurationMs > 0) {
-              log("Track duration elapsed: " + elapsed + "ms >= " + trackDurationMs + "ms");
-              log("TRACK ENDED DETECTED BY POLLING");
-              stopPolling();
-              isPlaying = false;
-              notifyVideoEnded();
-              return;
-            }
-
-            if (usingAudio && audio && audio.currentTime > 0) {
-              setStatus("playing " + Math.floor(audio.currentTime) + "s / " + Math.floor(audio.duration) +
-                "s");
-            } else {
-              var remaining = Math.max(0, Math.floor((trackDurationMs - elapsed) / 1000));
-              setStatus("playing " + Math.floor(elapsed / 1000) + "s / " + Math.floor(trackDurationMs / 1000) +
-                "s");
-            }
-          }, checkInterval);
+        if(trackDurationMs>0){
+          pollingInterval=setInterval(function(){
+            if(!isPlaying) return;
+            var elapsed=Date.now()-trackStartedAt;
+            if(usingAudio && audio && audio.ended){ stopPolling(); notifyVideoEnded(); return; }
+            if(elapsed>=trackDurationMs-500 && (!usingAudio || !audio.duration || isNaN(audio.duration))){ stopPolling(); isPlaying=false; notifyVideoEnded(); return; }
+          },1000);
         } else {
-          log("Warning: No track duration available, using fallback detection");
-
-          if (usingAudio) {
-            pollingInterval = setInterval(function () {
-              if (audio && audio.ended) {
-                stopPolling();
-                notifyVideoEnded();
-                return;
-              }
-              if (audio && audio.currentTime > 0 && audio.currentTime >= audio.duration - 0.5) {
-                stopPolling();
-                notifyVideoEnded();
-              }
-            }, 500);
+          if(usingAudio){
+            pollingInterval=setInterval(function(){ if(audio && audio.ended){ stopPolling(); notifyVideoEnded(); } },500);
           } else {
-            pollingInterval = setInterval(function () {
-              if (!isPlaying) return;
-              var elapsed = Date.now() - trackStartedAt;
-              if (elapsed > 180000) {
-                log("Fallback timeout reached (3 minutes)");
-                stopPolling();
-                isPlaying = false;
-                notifyVideoEnded();
-              }
-            }, 5000);
+            pollingInterval=setInterval(function(){ if(!isPlaying) return; var elapsed=Date.now()-trackStartedAt; if(elapsed>180000){ stopPolling(); isPlaying=false; notifyVideoEnded(); } },5000);
           }
         }
-
-        var safetyTimeout = Math.max(trackDurationMs || 180000, 180000) + 10000;
-        setTimeout(function () {
-          if (pollingInterval && !endedSent) {
-            log("Safety timeout reached - sending end");
-            stopPolling();
-            if (!endedSent) {
-              notifyVideoEnded();
-            }
-          }
-        }, safetyTimeout);
+        var safetyTimeout=Math.max(trackDurationMs||180000,180000)+15000;
+        setTimeout(function(){ if(pollingInterval && !endedSent){ stopPolling(); if(!endedSent) notifyVideoEnded(); } }, safetyTimeout);
       }
+      function stopPolling(){ if(pollingInterval){clearInterval(pollingInterval);pollingInterval=null;} }
 
-      function stopPolling() {
-        if (pollingInterval) {
-          clearInterval(pollingInterval);
-          pollingInterval = null;
-          log("Polling stopped");
-        }
+      function handleHostCommand(data){
+        if(data==="play"){ endedSent=false; if(usingAudio) playAudio(); else playTrack(); return; }
+        if(data==="pause"){ if(usingAudio) audio.pause(); else { var f=document.getElementById("spWidget"); if(f){try{var s=f.src;f.src="";f.src=s;isPlaying=false;stopPolling();}catch(e){}} } return; }
+        if(data==="replay"||data==="next"){ endedSent=false; if(usingAudio){try{audio.currentTime=0}catch(e){} playAudio();} else playTrack(); return; }
       }
-
-      function handleHostCommand(data) {
-        log("Host command:", data);
-
-        if (data === "play") {
-          endedSent = false;
-          if (usingAudio) {
-            playAudio();
-          } else {
-            playTrack();
-          }
-          return;
-        }
-
-        if (data === "pause") {
-          if (usingAudio) {
-            audio.pause();
-          } else {
-            var iframe = document.getElementById("spWidget");
-            if (iframe) {
-              try {
-                var currentSrc = iframe.src;
-                iframe.src = "";
-                iframe.src = currentSrc;
-                isPlaying = false;
-                stopPolling();
-                setStatus("paused");
-                log("Embed paused (reloaded)");
-              } catch (e) {
-                console.error("[SP] Error pausing embed:", e);
-              }
-            }
-          }
-          return;
-        }
-
-        if (data === "replay" || data === "next") {
-          endedSent = false;
-          if (usingAudio) {
-            try {
-              audio.currentTime = 0;
-            } catch (e) { }
-            playAudio();
-          } else {
-            playTrack();
-          }
-          return;
-        }
+      if(window.chrome && window.chrome.webview){
+        window.chrome.webview.addEventListener("message", function(event){ handleHostCommand(event.data); });
       }
-
-      if (window.chrome && window.chrome.webview) {
-        log("WebView2 bridge detected.");
-        window.chrome.webview.addEventListener("message", function (event) {
-          handleHostCommand(event.data);
-        });
-      } else {
-        log("WebView2 bridge NOT detected.");
-      }
-
-      function loadTrack() {
-        if (!trackId) {
-          showError("Missing trackId parameter");
-          return;
-        }
-
-        log("Loading track:", trackId);
-        setStatus("loading");
-
-        fetch("/track?trackId=" + encodeURIComponent(trackId))
-          .then(function (res) {
-            if (!res.ok) {
-              throw new Error("Track not found (HTTP " + res.status + ")");
-            }
-            return res.json();
-          })
-          .then(function (track) {
-            log("Track API response:", track);
-            render(track);
-          })
-          .catch(function (error) {
-            console.error("[SP] Load error:", error);
-            showError(error.message || "Failed to load track");
-          });
-      }
-
-      window.addEventListener("beforeunload", function () {
-        stopPolling();
+      window.addEventListener("message", function(e){
+        if(e.data && typeof e.data==="string") handleHostCommand(e.data);
+        else if(e.data && e.data.type) handleHostCommand(e.data.type);
       });
 
-      loadTrack();
+      function init(){
+        if(!trackId){ showError("Missing trackId parameter"); return; }
+        // fastest: inject iframe instantly, no waiting, no spinner
+        createSkeleton();
+        // load metadata in background (no blocking)
+        fetch("/track?trackId="+encodeURIComponent(trackId))
+          .then(function(res){ if(!res.ok) throw new Error("Track not found"); return res.json(); })
+          .then(function(track){ updateMeta(track); })
+          .catch(function(error){ console.error(error); /* keep player, show tiny error */ });
+        // optional: try CDN audio in background, but keep embed as primary for speed
+        // if you want <audio> full via CDN, uncomment:
+        // fetch("/stream?trackId="+encodeURIComponent(trackId)).then(r=>r.json()).then(d=>{ if(d.source==="spotify_cdn" && d.audioUrl) setupAudioPlayer(d.audioUrl, d.directCdnUrl, d); });
+      }
+
+      window.addEventListener("beforeunload", function(){ stopPolling(); });
+      init();
     })();
   </script>
-
 </body>
-
 </html>
