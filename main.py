@@ -415,43 +415,145 @@ async def get_track_metadata(app, track_id: str):
     now=time.time()
     cached=TRACK_META_CACHE.get(tid)
     if cached and now < cached["expiresAt"]: return cached["data"]
-    browser=app.state.browser
-    if not browser: return None
-    page, ctx = await new_page_with_cookies(browser, use_cookie=True)
-    found={}
-    async def on_resp(resp):
-        if "api-partner.spotify.com/pathfinder" not in resp.url: return
-        try:
-            j=await resp.json()
-        except: return
-        for d in find_track_objs(j.get("data")):
-            if d.get("id")==tid: found["d"]=d; found["root"]=j.get("data"); return
-    page.on("response", on_resp)
+    # Fastest: oEmbed only for thumbnail, no blocking pathfinder
+    # Returns in ~150ms, background enrich will fill duration later
+    oembed_thumb=None
+    oembed_title="Unknown"
+    oembed_artist=""
     try:
-        await page.goto(f"https://open.spotify.com/track/{tid}", wait_until="commit", timeout=30000)
-        for _ in range(20):
-            if "d" in found: break
-            await asyncio.sleep(0.5)
+        async with httpx.AsyncClient(timeout=4.0) as tmp:
+            ro=await tmp.get(f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{tid}", headers={"User-Agent":"Mozilla/5.0"})
+            if ro.status_code==200:
+                oj=ro.json()
+                oembed_thumb=oj.get("thumbnail_url")
+                title=oj.get("title") or "Unknown"
+                artist=""
+                if " - " in title:
+                    parts=title.split(" - ")
+                    title=parts[0]
+                    artist=" - ".join(parts[1:])
+                elif oj.get("author_name"):
+                    artist=oj.get("author_name")
+                oembed_title=title
+                oembed_artist=artist
     except Exception as e:
-        print(f"[META] err {e}")
-    finally:
-        try: await page.close()
+        print(f"[META] oEmbed err {e}")
+    # If we have thumbnail, return immediately and enrich duration in background
+    if oembed_thumb:
+        oembed_meta={
+            "title": oembed_title,
+            "trackId": tid,
+            "uri": f"spotify:track:{tid}",
+            "link": f"https://open.spotify.com/track/{tid}",
+            "thumbnail": oembed_thumb,
+            "artist": oembed_artist,
+            "artistList": [oembed_artist] if oembed_artist else [],
+            "album": None,
+            "albumUrl": None,
+            "duration": "0:00",
+            "durationMs": 0,
+            "explicit": False,
+            "popularity": None,
+            "previewUrl": None,
+            "releaseDate": None,
+            "type": "track",
+        }
+        TRACK_META_CACHE[tid]={"data":oembed_meta,"expiresAt":now+30}
+        # Background enrich with accurate duration via pathfinder (don't block response)
+        async def bg_enrich():
+            try:
+                import asyncio as _aio
+                data=await _aio.wait_for(spotify_query(app, operation_name="getTrack", variables={"uri":f"spotify:track:{tid}","includeVideoAssociationItems":False}), timeout=8.0)
+                objs=find_track_objs(data.get("data"))
+                found=None
+                root=data.get("data")
+                for d in objs:
+                    if d.get("id")==tid:
+                        found=d; break
+                if not found:
+                    tu=(root or {}).get("trackUnion") or {}
+                    if tu.get("id")==tid: found=tu
+                if found:
+                    if not found.get("artists"):
+                        fa=(root.get("trackUnion") or {}).get("firstArtist") or (found.get("firstArtist") or {})
+                        if isinstance(fa, dict) and fa.get("items"):
+                            found=dict(found)
+                            found["artists"]={"items":fa.get("items")}
+                    meta=map_track(found)
+                    if not meta.get("thumbnail") and oembed_thumb:
+                        meta["thumbnail"]=oembed_thumb
+                    TRACK_META_CACHE[tid]={"data":meta,"expiresAt":time.time()+600}
+                    print(f"[META] bg enrich done for {tid} duration {meta.get('duration')}")
+            except Exception as e:
+                print(f"[META] bg enrich err {e} for {tid}")
+        try:
+            import asyncio as _asyncio
+            _asyncio.create_task(bg_enrich())
         except: pass
-        if ctx:
-            try: await ctx.close()
-            except: pass
-    if "d" not in found: return None
-    d=found["d"]
-    if not d.get("artists"):
-        fa=((found.get("root") or {}).get("trackUnion") or {}).get("firstArtist") or {}
-        d=dict(d); d["artists"]={"items":(fa.get("items") or [])}
-    meta=map_track(d)
-    TRACK_META_CACHE[tid]={"data":meta,"expiresAt":now+TRACK_META_TTL}
-    return meta
+        return oembed_meta
+    # Fallback if oEmbed failed: try pathfinder directly
+    try:
+        import asyncio as _aio2
+        data=await _aio2.wait_for(spotify_query(app, operation_name="getTrack", variables={"uri":f"spotify:track:{tid}","includeVideoAssociationItems":False}), timeout=6.0)
+        objs=find_track_objs(data.get("data"))
+        found=None
+        root=data.get("data")
+        for d in objs:
+            if d.get("id")==tid:
+                found=d; break
+        if not found:
+            tu=(root or {}).get("trackUnion") or {}
+            if tu.get("id")==tid: found=tu
+        if found:
+            if not found.get("artists"):
+                fa=(root.get("trackUnion") or {}).get("firstArtist") or (found.get("firstArtist") or {})
+                if isinstance(fa, dict) and fa.get("items"):
+                    found=dict(found)
+                    found["artists"]={"items":fa.get("items")}
+            meta=map_track(found)
+            TRACK_META_CACHE[tid]={"data":meta,"expiresAt":time.time()+600}
+            return meta
+    except Exception as e:
+        print(f"[META] pathfinder fallback err {e} for {tid}")
+    # Last resort browser
+    browser=app.state.browser
+    if browser:
+        try:
+            page, ctx = await new_page_with_cookies(browser, use_cookie=True)
+            found={}
+            async def on_resp(resp):
+                if "api-partner.spotify.com/pathfinder" not in resp.url: return
+                try: j=await resp.json()
+                except: return
+                for d in find_track_objs(j.get("data")):
+                    if d.get("id")==tid: found["d"]=d; found["root"]=j.get("data"); return
+            page.on("response", on_resp)
+            try:
+                await page.goto(f"https://open.spotify.com/track/{tid}", wait_until="commit", timeout=12000)
+                for _ in range(8):
+                    if "d" in found: break
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"[META] browser err {e}")
+            finally:
+                try: await page.close()
+                except: pass
+                if ctx:
+                    try: await ctx.close()
+                    except: pass
+            if "d" in found:
+                d=found["d"]
+                if not d.get("artists"):
+                    fa=((found.get("root") or {}).get("trackUnion") or {}).get("firstArtist") or {}
+                    d=dict(d); d["artists"]={"items":(fa.get("items") or [])}
+                meta=map_track(d)
+                TRACK_META_CACHE[tid]={"data":meta,"expiresAt":time.time()+600}
+                return meta
+        except Exception as e:
+            print(f"[META] browser exception {e}")
+    return None
 
-# ---------------------------------------------------------------------------
-# Spotify CDN – try to get direct cdnurl via spclient (may be DRM, but we try)
-# ---------------------------------------------------------------------------
+
 async def try_spotify_cdn(app, track_id: str):
     tid=sanitize_track_id(track_id)
     async with CDN_LOCK:

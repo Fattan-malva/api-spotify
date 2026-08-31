@@ -24,6 +24,8 @@
     .artwork{grid-column:1;grid-row:1 / span 2;width:100%;height:100%;min-width:0;min-height:0;justify-self:stretch;align-self:stretch;border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6);background:rgba(255,255,255,.06)}
     .artwork img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .4s ease}
     .artwork img.loaded{opacity:1}
+    .artwork:empty{background: linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.12) 37%, rgba(255,255,255,0.06) 63%); background-size:400% 100%; animation: shimmer 1.2s linear infinite}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
     .info{grid-column:2;grid-row:1;text-align:left;width:100%;min-width:0;align-self:start;padding-top:4px;overflow:hidden}
     .info h1{color:#fff;font-size:clamp(24px,4vw,36px);font-weight:700;white-space:nowrap;display:inline-block;padding-left:100%;animation:scrollText 12s linear infinite}
     @keyframes scrollText{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
@@ -344,11 +346,19 @@
           // If host already requested play before ready, execute now
           if(pendingPlay){
             pendingPlay=false;
+            log("pendingPlay true -> doPlayEmbed in 250ms");
             setTimeout(function(){ doPlayEmbed(); }, 250);
+          } else {
+            log("Autoplay scheduled in 400ms (isPlaying="+isPlaying+" endedSent="+endedSent+")");
+            // Autoplay restored - previous behavior was autoplay
+            setTimeout(function(){
+              log("Autoplay timeout fired isPlaying="+isPlaying+" endedSent="+endedSent);
+              if(!endedSent) {
+                // Always try autoplay, even if isPlaying (to ensure volume/play)
+                doPlayEmbed();
+              }
+            }, 400);
           }
-          // Do NOT auto-play here - let WebView2 host control via postMessage "play"
-          // If you want autoplay without host, uncomment next line:
-          // setTimeout(function(){ if(!isPlaying) doPlayEmbed(); }, 400);
         };
         iframe.onerror=function(e){ console.error("[SP] Embed error", e); };
       }
