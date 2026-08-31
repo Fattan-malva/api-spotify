@@ -1,0 +1,1392 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotify Player</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%
+    }
+
+    body {
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .bg {
+      position: fixed;
+      inset: -80px;
+      z-index: 0;
+      background-size: cover;
+      background-position: center;
+      filter: blur(80px) brightness(.35) saturate(1.3);
+      transform: scale(1.15);
+      transition: background-image .6s ease
+    }
+
+    .bg-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, .15) 0%, rgba(0, 0, 0, .65) 100%)
+    }
+
+    .content {
+      position: relative;
+      z-index: 2;
+      width: min(1120px, calc(100% - 48px));
+      height: min(540px, calc(100vh - 48px));
+      display: grid;
+      grid-template-columns: min(46vw, 500px) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      align-content: center;
+      align-items: stretch;
+      justify-content: center;
+      column-gap: clamp(30px, 4vw, 64px);
+      margin: auto
+    }
+
+    .artwork {
+      grid-column: 1;
+      grid-row: 1 / span 2;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      justify-self: stretch;
+      align-self: stretch;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
+      background: rgba(255, 255, 255, .06)
+    }
+
+    .artwork img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      opacity: 0;
+      transition: opacity .4s ease
+    }
+
+    .artwork img.loaded {
+      opacity: 1
+    }
+
+    .artwork:empty {
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 25%, rgba(255, 255, 255, 0.12) 37%, rgba(255, 255, 255, 0.06) 63%);
+      background-size: 400% 100%;
+      animation: shimmer 1.2s linear infinite
+    }
+
+    @keyframes shimmer {
+      0% {
+        background-position: 200% 0
+      }
+
+      100% {
+        background-position: -200% 0
+      }
+    }
+
+    .info {
+      grid-column: 2;
+      grid-row: 1;
+      text-align: left;
+      width: 100%;
+      min-width: 0;
+      align-self: start;
+      padding-top: 4px;
+      overflow: hidden
+    }
+
+    .info h1 {
+      color: #fff;
+      font-size: clamp(24px, 4vw, 36px);
+      font-weight: 700;
+      white-space: nowrap;
+      display: inline-block;
+      padding-left: 100%;
+      animation: scrollText 12s linear infinite
+    }
+
+    @keyframes scrollText {
+      0% {
+        transform: translateX(0)
+      }
+
+      100% {
+        transform: translateX(-100%)
+      }
+    }
+
+    .info h2 {
+      color: rgba(255, 255, 255, .7);
+      font-size: clamp(14px, 2vw, 18px);
+      margin-top: 6px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .info .meta {
+      color: rgba(255, 255, 255, .5);
+      font-size: 13px;
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .info .stats {
+      color: rgba(255, 255, 255, .45);
+      font-size: 13px;
+      margin-top: 16px;
+      display: flex;
+      gap: 18px;
+      justify-content: flex-start;
+      flex-wrap: wrap
+    }
+
+    .player {
+      grid-column: 2;
+      grid-row: 2;
+      width: 100%;
+      max-width: none;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
+      align-self: end;
+      background: rgba(20, 20, 20, .92);
+      border: 1px solid rgba(255, 255, 255, .08);
+      backdrop-filter: blur(16px);
+      min-height: 166px;
+      display: flex;
+      flex-direction: column
+    }
+
+    .player iframe {
+      width: 100%;
+      height: 166px;
+      border: 0;
+      display: block;
+      background: #181818
+    }
+
+    .audio-card {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px
+    }
+
+    .audio-top {
+      display: flex;
+      align-items: center;
+      gap: 14px
+    }
+
+    .play-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #1db954;
+      border: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-shadow: 0 8px 24px rgba(29, 185, 84, .45);
+      transition: transform .15s ease, filter .15s ease
+    }
+
+    .play-btn:hover {
+      transform: scale(1.06);
+      filter: brightness(1.08)
+    }
+
+    .play-btn:active {
+      transform: scale(.96)
+    }
+
+    .play-btn svg {
+      margin-left: 2px
+    }
+
+    .play-btn.playing {
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .3)
+    }
+
+    .play-btn.playing svg path {
+      fill: #000
+    }
+
+    .audio-meta {
+      flex: 1;
+      min-width: 0
+    }
+
+    .audio-meta .t {
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.2
+    }
+
+    .audio-meta .a {
+      color: rgba(255, 255, 255, .55);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px
+    }
+
+    .audio-meta .src {
+      color: rgba(255, 255, 255, .35);
+      font-size: 10px;
+      margin-top: 4px;
+      letter-spacing: .4px
+    }
+
+    .time-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: rgba(255, 255, 255, .55);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums
+    }
+
+    .progress-wrap {
+      flex: 1;
+      height: 4px;
+      background: rgba(255, 255, 255, .15);
+      border-radius: 999px;
+      overflow: hidden;
+      cursor: pointer;
+      position: relative
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #1db954;
+      border-radius: 999px;
+      transition: width .1s linear;
+      position: relative
+    }
+
+    .progress-bar::after {
+      content: "";
+      position: absolute;
+      right: -6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+      opacity: 0;
+      transition: opacity .15s
+    }
+
+    .progress-wrap:hover .progress-bar::after {
+      opacity: 1
+    }
+
+    .vol-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 2px
+    }
+
+    .vol-row input[type=range] {
+      flex: 1;
+      accent-color: #1db954;
+      height: 3px
+    }
+
+    .audio-card .hint {
+      font-size: 10px;
+      color: rgba(255, 255, 255, .35);
+      text-align: center;
+      letter-spacing: .3px
+    }
+
+    #audio {
+      display: none
+    }
+
+    .error {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 50;
+      color: #fff;
+      font-size: 16px;
+      text-align: center;
+      max-width: 480px;
+      padding: 20px
+    }
+
+    .error small {
+      display: block;
+      margin-top: 10px;
+      color: rgba(255, 255, 255, .5);
+      font-size: 12px
+    }
+
+    #status {
+      position: fixed;
+      left: 10px;
+      bottom: 10px;
+      z-index: 100;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, .7);
+      color: rgba(255, 255, 255, .55);
+      font-size: 10px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s ease;
+      max-width: 70vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    #status.show {
+      opacity: 1
+    }
+
+    .click-hint {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .65);
+      color: #fff;
+      cursor: pointer;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: .5px;
+      backdrop-filter: blur(6px)
+    }
+
+    .click-hint .play-ico {
+      width: 84px;
+      height: 84px;
+      border-radius: 50%;
+      background: #1db954;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      box-shadow: 0 12px 40px rgba(29, 185, 84, .5)
+    }
+
+    .click-hint .play-ico::after {
+      content: "";
+      display: block;
+      width: 0;
+      height: 0;
+      border-left: 26px solid #fff;
+      border-top: 16px solid transparent;
+      border-bottom: 16px solid transparent;
+      margin-left: 6px
+    }
+
+    @media (max-width:760px) {
+      body {
+        overflow: auto
+      }
+
+      .content {
+        width: 100%;
+        height: auto;
+        min-height: 100%;
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        align-content: center;
+        justify-items: center;
+        align-items: center;
+        row-gap: 28px;
+        padding: 24px 18px;
+        overflow: auto
+      }
+
+      .artwork {
+        grid-column: 1;
+        grid-row: 1;
+        width: min(78vw, 360px);
+        height: auto;
+        aspect-ratio: 1;
+        justify-self: center;
+        align-self: auto
+      }
+
+      .info {
+        grid-column: 1;
+        grid-row: 2;
+        text-align: center;
+        width: 100%;
+        padding-top: 0;
+        align-self: auto
+      }
+
+      .info .stats {
+        justify-content: center
+      }
+
+      .player {
+        grid-column: 1;
+        grid-row: 3;
+        width: 100%;
+        align-self: auto
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg" id="bg"></div>
+  <div class="bg-overlay"></div>
+  <div class="content" id="content"></div>
+  <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
+  <div id="status"></div>
+
+  <script>
+    (function () {
+      "use strict";
+      var params = new URLSearchParams(window.location.search);
+      var trackId = params.get("trackId");
+      var audio = document.getElementById("audio");
+      var content = document.getElementById("content");
+      var statusEl = document.getElementById("status");
+
+      var usingAudio = false, endedSent = false, trackDurationMs = 0, trackStartedAt = 0, pollingInterval = null, isPlaying = false;
+      var hintEl = null, hintShown = false, playerEl = null, progressBar = null, curTimeEl = null, durTimeEl = null, playBtn = null;
+      var metaTrack = null;
+      var embedReady = false, pendingPlay = false;
+      var pendingVolume = 0.9;
+      // allow host to set initial volume via ?volume=0.8
+      try {
+        var volParam = params.get("volume");
+        if (volParam != null) {
+          var v = parseFloat(volParam);
+          if (isFinite(v)) { if (v > 1) v /= 100; pendingVolume = Math.max(0, Math.min(1, v)); }
+        }
+      } catch (e) { }
+      // Initial track info from search API (so duration etc always sesuai)
+      // Host can pass ?title=...&artist=...&thumbnail=...&duration=3:45&durationMs=225000&album=...
+      var initialTrack = null;
+      try {
+        var initTitle = params.get("title") || params.get("trackTitle");
+        var initArtist = params.get("artist") || params.get("trackArtist");
+        var initThumb = params.get("thumbnail") || params.get("thumb") || params.get("cover") || params.get("image");
+        var initDuration = params.get("duration");
+        var initDurationMs = params.get("durationMs") || params.get("duration_ms");
+        var initAlbum = params.get("album");
+        if (initTitle || initArtist || initThumb || initDuration) {
+          initialTrack = {
+            title: initTitle ? decodeURIComponent(initTitle) : null,
+            artist: initArtist ? decodeURIComponent(initArtist) : null,
+            thumbnail: initThumb ? decodeURIComponent(initThumb) : null,
+            duration: initDuration ? decodeURIComponent(initDuration) : null,
+            durationMs: initDurationMs ? parseInt(initDurationMs, 10) : 0,
+            album: initAlbum ? decodeURIComponent(initAlbum) : null
+          };
+          // Also support JSON encoded ?track=... (from search)
+          var trackJson = params.get("track");
+          if (trackJson) {
+            try { var tj = JSON.parse(decodeURIComponent(trackJson)); if (tj) initialTrack = { ...initialTrack, ...tj }; } catch (e) { }
+          }
+        } else {
+          var trackJson2 = params.get("track");
+          if (trackJson2) {
+            try { initialTrack = JSON.parse(decodeURIComponent(trackJson2)); } catch (e) { }
+          }
+        }
+        // Also allow host to postMessage track object later (see message handler)
+      } catch (e) { log("initialTrack parse err", e); }
+
+      function log() { var a = Array.prototype.slice.call(arguments); a.unshift("[SP]"); console.log.apply(console, a) }
+      function setStatus(m, show) {
+        if (!statusEl) return;
+        statusEl.textContent = m || "";
+        if (m) { statusEl.classList.add("show"); if (show !== false) setTimeout(function () { statusEl.classList.remove("show") }, 3200); }
+        else statusEl.classList.remove("show");
+      }
+      function sendToHost(message) {
+        log("Sending message:", message);
+        try {
+          if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(message);
+            return true;
+          }
+        } catch (e) { console.error(e) }
+        try { window.postMessage({ type: message, trackId: trackId }, "*"); } catch (e) { }
+        return false;
+      }
+      function notifyVideoEnded() {
+        if (endedSent) return;
+        endedSent = true;
+        stopPolling(); isPlaying = false; if (playBtn) playBtn.classList.remove("playing");
+        sendToHost("videoEnded");
+        try { window.dispatchEvent(new CustomEvent("videoEnded", { detail: { trackId: trackId, event: "videoEnded" } })); } catch (e) { }
+      }
+      function showError(message) {
+        var ex = document.querySelector(".error"); if (ex) ex.remove();
+        var err = document.createElement("div"); err.className = "error";
+        var strong = document.createElement("strong"); strong.textContent = message || "Failed to load track";
+        var small = document.createElement("small"); small.textContent = "Check that the trackId is valid.";
+        err.appendChild(strong); err.appendChild(small); document.body.appendChild(err);
+      }
+      function fmtTime(sec) {
+        if (!isFinite(sec) || sec < 0) sec = 0;
+        sec = Math.floor(sec);
+        var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+        if (h) return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+        return m + ":" + (s < 10 ? "0" : "") + s;
+      }
+      function ensureHint() {
+        if (hintShown || hintEl) return;
+        hintShown = true;
+        hintEl = document.createElement("div"); hintEl.className = "click-hint";
+        hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div><div style="margin-top:8px;font-size:12px;opacity:.6">Autoplay blocked</div>';
+        hintEl.addEventListener("click", function () { playTrack(); if (hintEl) { hintEl.remove(); hintEl = null; } });
+        document.body.appendChild(hintEl);
+      }
+
+      function getEmbedDoc() {
+        var iframe = document.getElementById("spWidget");
+        try { return iframe && iframe.contentDocument ? iframe.contentDocument : null; } catch (e) { return null; }
+      }
+      function getEmbedWindow() {
+        var iframe = document.getElementById("spWidget");
+        try { return iframe && iframe.contentWindow ? iframe.contentWindow : null; } catch (e) { return null; }
+      }
+      // Try to set volume inside embed (same-origin proxy allows DOM access for outer wrapper,
+      // inner player is cross-origin so we also postMessage with many formats)
+      function setEmbedVolume(vol) {
+        if (!isFinite(vol)) return false;
+        if (vol > 1) vol /= 100;
+        pendingVolume = Math.max(0, Math.min(1, vol));
+        var doc = getEmbedDoc();
+        var win = getEmbedWindow();
+        var ok = false;
+        if (doc) {
+          try {
+            var auds = doc.querySelectorAll("audio");
+            auds.forEach(function (a) { try { a.volume = pendingVolume; a.muted = false; ok = true; } catch (e) { } });
+            var ranges = doc.querySelectorAll('input[type="range"]');
+            ranges.forEach(function (r) {
+              try {
+                var max = parseFloat(r.max) || 100;
+                if (max === 100 || max === 1) {
+                  r.value = max === 100 ? pendingVolume * 100 : pendingVolume;
+                  r.dispatchEvent(new Event('input', { bubbles: true }));
+                  r.dispatchEvent(new Event('change', { bubbles: true }));
+                  ok = true;
+                }
+              } catch (e) { }
+            });
+            // Also try to find Spotify volume slider via aria
+            var volSliders = doc.querySelectorAll('[aria-label*="volume" i], [data-testid*="volume" i]');
+            volSliders.forEach(function (el) {
+              try {
+                // Some use custom slider with role slider
+                if (el.getAttribute("role") === "slider") {
+                  el.setAttribute("aria-valuenow", String(Math.round(pendingVolume * 100)));
+                  ok = true;
+                }
+              } catch (e) { }
+            });
+            try { if (win) win.localStorage.setItem("volume", String(pendingVolume)); } catch (e) { }
+            try { if (win) win.localStorage.setItem("player_volume", String(pendingVolume)); } catch (e) { }
+            // Also try inner iframe if present (outer embed contains inner iframe)
+            var innerIframes = doc.querySelectorAll("iframe");
+            innerIframes.forEach(function (inner) {
+              try {
+                var idoc = inner.contentDocument;
+                if (idoc) {
+                  var iauds = idoc.querySelectorAll("audio");
+                  iauds.forEach(function (a) { try { a.volume = pendingVolume; a.muted = false; ok = true; } catch (e) { } });
+                }
+              } catch (e) { }
+            });
+          } catch (e) { log("setEmbedVolume DOM err", e); }
+        }
+        if (win) {
+          try {
+            // Send many possible postMessage formats — Spotify embed listens to different ones
+            var payloads = [
+              { command: "setVolume", volume: pendingVolume },
+              { command: "setVolume", value: pendingVolume },
+              { type: "setVolume", volume: pendingVolume },
+              { action: "setVolume", volume: pendingVolume },
+              { method: "setVolume", args: [pendingVolume] },
+              { command: "volume", volume: pendingVolume },
+              JSON.stringify({ method: "setVolume", args: [pendingVolume] })
+            ];
+            // send both 0-1 and 0-100
+            var payloads100 = [
+              { command: "setVolume", volume: pendingVolume * 100 },
+              { type: "setVolume", volume: pendingVolume * 100 }
+            ];
+            payloads.concat(payloads100).forEach(function (p) {
+              try { win.postMessage(p, "*"); } catch (e) { }
+              try {
+                // Also try to post to inner iframe window if exists
+                if (doc) {
+                  var inners = doc.querySelectorAll("iframe");
+                  inners.forEach(function (inner) {
+                    try { inner.contentWindow.postMessage(p, "*"); } catch (e) { }
+                  });
+                }
+              } catch (e) { }
+            });
+            ok = true;
+          } catch (e) { }
+        }
+        // Also set our own <audio> volume if usingAudio
+        if (usingAudio && audio) {
+          try { audio.volume = pendingVolume; audio.muted = false; ok = true; } catch (e) { }
+        }
+        log("setEmbedVolume", pendingVolume, "ok", ok);
+        return ok;
+      }
+      function clickPlayInEmbed() {
+        var doc = getEmbedDoc();
+        var win = getEmbedWindow();
+        if (doc) {
+          try {
+            var selectors = [
+              'button[data-testid="play-pause-button"]',
+              'button[data-testid="play-button"]',
+              '[data-testid="play-pause-button"]',
+              'button[aria-label="Play"]',
+              '[aria-label="Play"]',
+              'button[title="Play"]',
+              '[title="Play"]'
+            ];
+            for (var i = 0; i < selectors.length; i++) {
+              var btn = doc.querySelector(selectors[i]);
+              if (btn) {
+                var label = (btn.getAttribute("aria-label") || "").toLowerCase();
+                if (label.indexOf("pause") !== -1) {
+                  log("Embed already playing, skip click");
+                  return true;
+                }
+                btn.click();
+                log("Clicked embed play button via", selectors[i]);
+                return true;
+              }
+            }
+            // Also search inside inner iframes
+            var inners = doc.querySelectorAll("iframe");
+            for (var j = 0; j < inners.length; j++) {
+              try {
+                var idoc = inners[j].contentDocument;
+                if (!idoc) continue;
+                for (var k = 0; k < selectors.length; k++) {
+                  var b2 = idoc.querySelector(selectors[k]);
+                  if (b2) { b2.click(); log("Clicked inner play", selectors[k]); return true; }
+                }
+              } catch (e) { }
+            }
+          } catch (e) { log("clickPlayInEmbed DOM err", e); }
+        }
+        if (win) {
+          try {
+            var cmds = [{ command: "play" }, { type: "play" }, { action: "play" }, { command: "togglePlay" }, { command: "resume" }, JSON.stringify({ method: "play" })];
+            cmds.forEach(function (c) { try { win.postMessage(c, "*"); } catch (e) { } });
+            // Also to inner
+            if (doc) {
+              var inners2 = doc.querySelectorAll("iframe");
+              inners2.forEach(function (inner) {
+                cmds.forEach(function (c) { try { inner.contentWindow.postMessage(c, "*"); } catch (e) { } });
+              });
+            }
+            log("Sent postMessage play to embed");
+          } catch (e) { }
+          return true;
+        }
+        return false;
+      }
+
+      function createSkeleton() {
+        var artwork = document.createElement("div"); artwork.className = "artwork"; artwork.id = "artwork";
+        // If initialTrack has thumbnail, show it instantly (fastest, sesuai search)
+        if (initialTrack && initialTrack.thumbnail) {
+          var img0 = document.createElement("img"); img0.alt = initialTrack.title || ""; img0.src = initialTrack.thumbnail; img0.onload = function () { this.classList.add("loaded") };
+          artwork.appendChild(img0);
+          try { document.getElementById("bg").style.backgroundImage = "url('" + initialTrack.thumbnail.replace(/'/g, "\\'") + "')"; } catch (e) { }
+        }
+        content.appendChild(artwork);
+        var info = document.createElement("div"); info.className = "info"; info.id = "info";
+        var title = document.createElement("h1"); title.id = "skeletonTitle"; title.textContent = (initialTrack && initialTrack.title) ? initialTrack.title : "\u00A0";
+        var artist = document.createElement("h2"); artist.id = "skeletonArtist"; artist.textContent = (initialTrack && initialTrack.artist) ? initialTrack.artist : "\u00A0";
+        info.appendChild(title); info.appendChild(artist);
+        // Show meta/stats immediately from search data if available
+        if (initialTrack) {
+          if (initialTrack.album) {
+            var meta0 = document.createElement("div"); meta0.className = "meta"; meta0.textContent = initialTrack.album; info.appendChild(meta0);
+          }
+          var stats0 = []; if (initialTrack.duration) stats0.push("⏱ " + initialTrack.duration);
+          // Also show durationMs if available
+          if (initialTrack.durationMs) trackDurationMs = initialTrack.durationMs;
+          if (stats0.length) { var statsEl0 = document.createElement("div"); statsEl0.className = "stats"; stats0.forEach(function (t) { var s = document.createElement("span"); s.textContent = t; statsEl0.appendChild(s) }); info.appendChild(statsEl0); }
+          if (initialTrack.durationMs) trackDurationMs = initialTrack.durationMs;
+          try { if (initialTrack.title) document.title = initialTrack.title + " – " + (initialTrack.artist || ""); } catch (e) { }
+        }
+        content.appendChild(info);
+        playerEl = document.createElement("div"); playerEl.className = "player"; playerEl.id = "player";
+        var iframe = document.createElement("iframe");
+        iframe.id = "spWidget";
+        iframe.setAttribute("allow", "autoplay; encrypted-media; fullscreen; clipboard-write");
+        iframe.setAttribute("allowtransparency", "true");
+        iframe.setAttribute("frameborder", "0");
+        iframe.setAttribute("loading", "eager");
+        iframe.src = "/embed-proxy?trackId=" + encodeURIComponent(trackId);
+        playerEl.appendChild(iframe);
+        content.appendChild(playerEl);
+        log("Embed iframe injected instantly: " + iframe.src);
+        embedReady = false;
+        pendingPlay = false;
+        iframe.onload = function () {
+          log("Spotify Embed loaded");
+          embedReady = true;
+          // Ensure audible volume immediately (fixes 0-volume bug) - but do NOT start playback yet
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 150);
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 600);
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 1500);
+          setStatus("ready");
+          sendToHost("embed_ready");
+          // Do NOT set isPlaying=true or trackStartedAt here - wait for actual play
+          // If host already requested play before ready, execute now
+          if (pendingPlay) {
+            pendingPlay = false;
+            log("pendingPlay true -> doPlayEmbed in 250ms");
+            setTimeout(function () { doPlayEmbed(); }, 250);
+          } else {
+            log("Autoplay scheduled in 400ms (isPlaying=" + isPlaying + " endedSent=" + endedSent + ")");
+            // Autoplay restored - previous behavior was autoplay
+            setTimeout(function () {
+              log("Autoplay timeout fired isPlaying=" + isPlaying + " endedSent=" + endedSent);
+              if (!endedSent) {
+                // Always try autoplay, even if isPlaying (to ensure volume/play)
+                doPlayEmbed();
+              }
+            }, 400);
+          }
+        };
+        iframe.onerror = function (e) { console.error("[SP] Embed error", e); };
+      }
+
+      function doPlayEmbed() {
+        setEmbedVolume(pendingVolume);
+        var clicked = clickPlayInEmbed();
+        try { document.getElementById("spWidget").focus(); } catch (e) { }
+        isPlaying = true; trackStartedAt = Date.now(); endedSent = false;
+        startPolling();
+        setStatus("playing");
+        setTimeout(function () { setEmbedVolume(pendingVolume); }, 300);
+        return clicked;
+      }
+
+      function updateMeta(track) {
+        // Merge with initialTrack so info selalu sesuai search (duration dari search lebih akurat saat pertama)
+        if (initialTrack) {
+          // Prefer search data for duration/thumbnail if /track returns 0 or missing
+          if ((!track.durationMs || track.durationMs === 0) && initialTrack.durationMs) track.durationMs = initialTrack.durationMs;
+          if (!track.duration || track.duration === "0:00") track.duration = initialTrack.duration;
+          if (!track.thumbnail && initialTrack.thumbnail) track.thumbnail = initialTrack.thumbnail;
+          if (!track.title && initialTrack.title) track.title = initialTrack.title;
+          if (!track.artist && initialTrack.artist) track.artist = initialTrack.artist;
+          if (!track.album && initialTrack.album) track.album = initialTrack.album;
+        }
+        metaTrack = track;
+        endedSent = false;
+        // Only overwrite trackDurationMs if valid (>0), otherwise keep initial
+        if (track.durationMs && track.durationMs > 0) trackDurationMs = track.durationMs;
+        else if (initialTrack && initialTrack.durationMs) trackDurationMs = initialTrack.durationMs;
+        document.title = (track.title || "Spotify") + " – " + (track.artist || "");
+        var art = track.thumbnail || "";
+        if (art) document.getElementById("bg").style.backgroundImage = "url('" + art.replace(/'/g, "\\'") + "')";
+        var artwork = document.getElementById("artwork");
+        if (artwork) {
+          artwork.innerHTML = "";
+          var img = document.createElement("img"); img.alt = track.title || ""; img.onload = function () { this.classList.add("loaded") }; if (art) img.src = art;
+          artwork.appendChild(img);
+        }
+        var titleEl = document.getElementById("skeletonTitle");
+        var artistEl = document.getElementById("skeletonArtist");
+        if (titleEl) titleEl.textContent = track.title || "Unknown";
+        if (artistEl) artistEl.textContent = track.artist || "";
+        var info = document.getElementById("info");
+        if (info) {
+          var metaBits = []; if (track.album) metaBits.push(track.album); if (track.explicit) metaBits.push("Explicit"); if (track.releaseDate) metaBits.push(track.releaseDate);
+          var oldMeta = info.querySelector(".meta"); if (oldMeta) oldMeta.remove();
+          var oldStats = info.querySelector(".stats"); if (oldStats) oldStats.remove();
+          if (metaBits.length) { var meta = document.createElement("div"); meta.className = "meta"; meta.textContent = metaBits.join(" · "); info.appendChild(meta); }
+          var stats = []; if (track.duration) stats.push("⏱ " + track.duration);
+          if (stats.length) { var statsEl = document.createElement("div"); statsEl.className = "stats"; stats.forEach(function (t) { var s = document.createElement("span"); s.textContent = t; statsEl.appendChild(s) }); info.appendChild(statsEl); }
+        }
+        if (trackDurationMs && pollingInterval == null && isPlaying) {
+          startPolling();
+        }
+      }
+
+      function setupAudioPlayer(proxyUrl, directUrl, info) {
+        usingAudio = true;
+        playerEl.innerHTML = "";
+        var card = document.createElement("div"); card.className = "audio-card";
+        card.innerHTML =
+          '<div class="audio-top">' +
+          '<button class="play-btn" id="playBtn" aria-label="play"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5.14v14l11-7-11-7z" fill="#fff"/></svg></button>' +
+          '<div class="audio-meta"><div class="t" id="audioTitle"></div><div class="a" id="audioArtist"></div></div>' +
+          '</div>' +
+          '<div class="time-row"><span id="curTime">0:00</span><div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div><span id="durTime">0:00</span></div>' +
+          '<div class="vol-row" style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:rgba(255,255,255,.45)">Vol</span><input id="volRange" type="range" min="0" max="1" step="0.01" value="' + pendingVolume + '"><span id="volLabel" style="font-size:11px;color:rgba(255,255,255,.5)">' + Math.round(pendingVolume * 100) + '%</span></div>';
+        playerEl.appendChild(card);
+        playBtn = document.getElementById("playBtn");
+        progressBar = document.getElementById("progressBar");
+        curTimeEl = document.getElementById("curTime");
+        durTimeEl = document.getElementById("durTime");
+        var progressWrap = document.getElementById("progressWrap");
+        var volRange = document.getElementById("volRange");
+        var volLabel = document.getElementById("volLabel");
+        document.getElementById("audioTitle").textContent = (metaTrack && metaTrack.title) || (info && info.title) || "Full audio";
+        document.getElementById("audioArtist").textContent = (metaTrack && metaTrack.artist) || (info && info.artist) || "";
+        if (durTimeEl && trackDurationMs) durTimeEl.textContent = fmtTime(trackDurationMs / 1000);
+        audio.onended = null; audio.onerror = null; audio.onplay = null; audio.onpause = null; audio.ontimeupdate = null; audio.onloadedmetadata = null;
+        audio.src = proxyUrl; audio.preload = "auto"; audio.crossOrigin = "anonymous"; audio.volume = pendingVolume;
+        audio.onloadedmetadata = function () { var d = audio.duration; if (isFinite(d)) { trackDurationMs = d * 1000; durTimeEl.textContent = fmtTime(d); } };
+        audio.onplay = function () { isPlaying = true; if (playBtn) { playBtn.classList.add("playing"); playBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="#000"/></svg>'; } trackStartedAt = Date.now() - ((audio.currentTime || 0) * 1000); startPolling(); };
+        audio.onpause = function () { if (!audio.ended) { isPlaying = false; stopPolling(); if (playBtn) { playBtn.classList.remove("playing"); playBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5.14v14l11-7-11-7z" fill="#fff"/></svg>'; } } };
+        audio.onerror = function (e) { console.error(e); if (directUrl && audio.src !== directUrl) { audio.src = directUrl; audio.load(); playAudio(); } };
+        audio.onended = function () { isPlaying = false; stopPolling(); if (progressBar) progressBar.style.width = "100%"; notifyVideoEnded(); };
+        audio.ontimeupdate = function () { if (!curTimeEl || !progressBar) return; var cur = audio.currentTime || 0, dur = audio.duration || (trackDurationMs / 1000) || 0; curTimeEl.textContent = fmtTime(cur); if (dur) { durTimeEl.textContent = fmtTime(dur); var pct = (cur / dur) * 100; progressBar.style.width = pct + "%"; } };
+        progressWrap.addEventListener("click", function (e) { var rect = progressWrap.getBoundingClientRect(); var x = e.clientX - rect.left; var pct = x / rect.width; var dur = audio.duration || (trackDurationMs / 1000); if (dur && isFinite(dur)) { audio.currentTime = pct * dur; } });
+        playBtn.addEventListener("click", function () { if (audio.paused) { playAudio(); } else { audio.pause(); } });
+        volRange.addEventListener("input", function () { var v = parseFloat(this.value); pendingVolume = v; audio.volume = v; volLabel.textContent = Math.round(v * 100) + "%"; setEmbedVolume(v); });
+        playAudio();
+      }
+
+      function playAudio() {
+        if (!audio) return;
+        audio.volume = pendingVolume;
+        audio.muted = false;
+        var p = audio.play();
+        if (p && typeof p.then === "function") {
+          p.then(function () { isPlaying = true; trackStartedAt = Date.now() - ((audio.currentTime || 0) * 1000); startPolling(); if (hintEl) { hintEl.remove(); hintEl = null } }).catch(function (err) { ensureHint(); });
+        }
+      }
+
+      function playTrack() {
+        if (usingAudio) { endedSent = false; playAudio(); return; }
+        if (!embedReady) {
+          pendingPlay = true;
+          log("Embed not ready, queue play");
+          return;
+        }
+        doPlayEmbed();
+      }
+
+      // --- VB.NET compatible wrappers (same names as api-soundcloud) ---
+      function playSound() {
+        log("[VB] playSound()");
+        endedSent = false;
+        pendingVolume = pendingVolume || 0.9;
+        if (usingAudio) audio.volume = pendingVolume;
+        setEmbedVolume(pendingVolume);
+        playTrack();
+        setTimeout(function () { setEmbedVolume(pendingVolume); }, 500);
+      }
+      function pauseSound() {
+        log("[VB] pauseSound()");
+        if (usingAudio) {
+          try { audio.pause(); } catch (e) { }
+          isPlaying = false; stopPolling();
+        } else {
+          try {
+            var doc = getEmbedDoc();
+            if (doc) {
+              var btn = doc.querySelector('button[aria-label="Pause"]') || doc.querySelector('[aria-label="Pause"]');
+              if (btn) btn.click(); else {
+                var w = getEmbedWindow(); if (w) w.postMessage({ command: "pause" }, "*");
+              }
+            }
+          } catch (e) { }
+          isPlaying = false; stopPolling();
+        }
+      }
+      function replaySound() {
+        log("[VB] replaySound() - api-soundcloud compatible: seekTo(0)+play");
+        endedSent = false;
+        isPlaying = false;
+        embedLastPositionMs = 0;
+        trackStartedAt = Date.now();
+        if (usingAudio) {
+          try { audio.currentTime = 0; } catch (e) { }
+          audio.volume = pendingVolume; audio.muted = false;
+          playAudio();
+        } else {
+          var iframe = document.getElementById("spWidget");
+          if (iframe) {
+            try {
+              // Try in-place seek first (no reload) for instant replay
+              var win = getEmbedWindow();
+              var doc = getEmbedDoc();
+              var seekOk = false;
+              // Try postMessage seek to 0
+              if (win) {
+                try {
+                  win.postMessage({ command: "seek", position: 0 }, "*");
+                  win.postMessage({ command: "seekTo", seconds: 0 }, "*");
+                  win.postMessage({ type: "seek", position: 0 }, "*");
+                  // Also to inner iframes
+                  if (doc) {
+                    var inners = doc.querySelectorAll("iframe");
+                    inners.forEach(function (inner) {
+                      try { inner.contentWindow.postMessage({ command: "seek", position: 0 }, "*"); } catch (e) { }
+                    });
+                  }
+                  seekOk = true;
+                } catch (e) { }
+              }
+              // Also try DOM range seek if found
+              if (doc) {
+                try {
+                  var ranges = doc.querySelectorAll('input[type="range"]');
+                  ranges.forEach(function (r) {
+                    try {
+                      var max = parseFloat(r.max) || 100;
+                      // Seek slider is usually 0-100 for position
+                      if (max > 1) {
+                        r.value = "0";
+                        r.dispatchEvent(new Event('input', { bubbles: true }));
+                        r.dispatchEvent(new Event('change', { bubbles: true }));
+                        seekOk = true;
+                      }
+                    } catch (e) { }
+                  });
+                } catch (e) { }
+              }
+              if (seekOk) {
+                log("replay: seek to 0 via postMessage/DOM");
+                // After seek, play
+                setTimeout(function () {
+                  setEmbedVolume(pendingVolume);
+                  doPlayEmbed();
+                }, 250);
+              } else {
+                // Fallback: reload iframe
+                var baseSrc = "/embed-proxy?trackId=" + encodeURIComponent(trackId);
+                iframe.src = baseSrc + "&t=" + Date.now();
+                pendingPlay = true;
+                isPlaying = false;
+                log("replay: iframe reloaded " + iframe.src);
+                setTimeout(function () { setEmbedVolume(pendingVolume); }, 600);
+              }
+            } catch (e) {
+              log("replay err", e);
+              // Fallback reload
+              try {
+                iframe.src = "/embed-proxy?trackId=" + encodeURIComponent(trackId) + "&t=" + Date.now();
+                pendingPlay = true;
+              } catch (ee) { }
+            }
+          } else {
+            playTrack();
+          }
+        }
+      }
+      function nextSound() {
+        log("[VB] nextSound() - api-soundcloud compatible (replay current, host should navigate to next trackId for queue)");
+        // For single-track player, next = replay. If host has queue, it should do WebView2.Navigate(newTrackUrl) instead of sending "next".
+        // We also notify host so it can handle queue
+        try { sendToHost("nextRequested"); } catch (e) { }
+        replaySound();
+      }
+
+      var embedLastPositionMs = 0;
+      var embedLastDurationMs = 0;
+      function startPolling() {
+        stopPolling();
+        log("startPolling trackDurationMs=" + trackDurationMs + " isPlaying=" + isPlaying + " usingAudio=" + usingAudio);
+        if (trackDurationMs > 0) {
+          pollingInterval = setInterval(function () {
+            if (!isPlaying || endedSent) return;
+            // For <audio> we have accurate currentTime, use it
+            if (usingAudio && audio) {
+              if (audio.ended) { log("audio.ended -> videoEnded"); stopPolling(); notifyVideoEnded(); return; }
+              // If audio has duration, use it instead of wall clock for accuracy
+              if (isFinite(audio.duration) && audio.duration > 0 && isFinite(audio.currentTime)) {
+                var remaining = (audio.duration - audio.currentTime) * 1000;
+                // Only trigger when truly at end (0.5s buffer) and not paused
+                if (remaining <= 500 && !audio.paused && !audio.ended) {
+                  log("audio remaining <=500ms -> videoEnded");
+                  stopPolling(); notifyVideoEnded(); return;
+                }
+                return; // don't use wall clock for audio
+              }
+            }
+            // For embed (iframe) - use wall clock but with generous buffer and embed position if available
+            // Prefer embed position if we have it from playback_update
+            if (!usingAudio && embedLastPositionMs > 0 && embedLastDurationMs > 0) {
+              var embRemaining = embedLastDurationMs - embedLastPositionMs;
+              if (embRemaining <= 1000 && isPlaying) {
+                log("embed position near end (" + embedLastPositionMs + "/" + embedLastDurationMs + ") -> videoEnded");
+                stopPolling(); notifyVideoEnded(); return;
+              }
+              // Don't use wall clock if we have embed position
+              return;
+            }
+            // Fallback wall clock for embed without position updates - add 2s buffer to prevent early trigger
+            var elapsed = Date.now() - trackStartedAt;
+            if (elapsed >= trackDurationMs + 2000) {
+              log("wall clock elapsed " + elapsed + " >= " + (trackDurationMs + 2000) + " -> videoEnded");
+              stopPolling(); isPlaying = false; notifyVideoEnded(); return;
+            }
+          }, 1000);
+        } else {
+          if (usingAudio) {
+            pollingInterval = setInterval(function () { if (audio && audio.ended) { stopPolling(); notifyVideoEnded(); } }, 500);
+          } else {
+            // No duration known - don't auto-end quickly, wait for embed event or safety timeout
+            pollingInterval = setInterval(function () {
+              if (!isPlaying || endedSent) return;
+              // Check embed position if available
+              if (embedLastPositionMs > 0 && embedLastDurationMs > 0 && (embedLastDurationMs - embedLastPositionMs) <= 1000) {
+                stopPolling(); notifyVideoEnded(); return;
+              }
+            }, 1000);
+          }
+        }
+        // Safety timeout: only if still playing and not ended, with longer buffer
+        var safetyMs = (trackDurationMs || 180000) + 30000;
+        // For embed, add extra buffer to allow full song
+        if (!usingAudio) safetyMs = Math.max(safetyMs, (embedLastDurationMs || trackDurationMs || 180000) + 30000);
+        log("safetyTimeout in " + safetyMs + "ms");
+        setTimeout(function () {
+          if (endedSent) return;
+          if (pollingInterval && isPlaying) {
+            log("safetyTimeout reached but isPlaying, NOT ending - extend");
+            // Don't auto-end on safety if still playing, just log
+            return;
+          }
+          if (pollingInterval && !endedSent && !isPlaying) {
+            log("safetyTimeout reached while paused, not ending");
+          }
+        }, safetyMs);
+        // Hard safety: only trigger if truly over duration + 30s and still not ended
+        setTimeout(function () {
+          if (!endedSent) {
+            var elapsed2 = Date.now() - trackStartedAt;
+            if (usingAudio) {
+              if (audio && !audio.ended && audio.currentTime < (audio.duration || 9999) - 1) {
+                log("hard safety: audio not ended, not triggering videoEnded");
+                return;
+              }
+            }
+            if (!usingAudio && embedLastPositionMs > 0 && (embedLastDurationMs - embedLastPositionMs) > 2000) {
+              log("hard safety: embed not near end, not triggering");
+              return;
+            }
+            if (elapsed2 >= (trackDurationMs || 180000) + 30000) {
+              log("hard safety trigger videoEnded");
+              stopPolling(); notifyVideoEnded();
+            }
+          }
+        }, safetyMs + 5000);
+      }
+      function stopPolling() { if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; } }
+
+      function handleHostCommand(data) {
+        log("Host command:", data);
+        var cmd = null, payload = null;
+        if (typeof data === "string") {
+          try { var parsed = JSON.parse(data); if (parsed && parsed.type) cmd = parsed.type; else if (parsed && parsed.command) cmd = parsed.command; else cmd = data; payload = parsed; } catch (e) { cmd = data; }
+        } else if (data && typeof data === "object") {
+          cmd = data.type || data.command || data.action || data.message;
+          payload = data;
+        }
+        // volume via WebView2: {type:"volume", volume:0.8} or {volume:0.8} or just "volume:0.8"
+        if (payload && (payload.volume != null || payload.value != null)) {
+          var v = parseFloat(payload.volume != null ? payload.volume : payload.value);
+          if (isFinite(v)) {
+            if (v > 1) v /= 100;
+            pendingVolume = Math.max(0, Math.min(1, v));
+            log("Volume command", pendingVolume);
+            if (usingAudio && audio) { audio.volume = pendingVolume; audio.muted = false; }
+            setEmbedVolume(pendingVolume);
+            // also update slider if exists
+            var vr = document.getElementById("volRange");
+            if (vr) { vr.value = String(pendingVolume); var lab = document.getElementById("volLabel"); if (lab) lab.textContent = Math.round(pendingVolume * 100) + "%"; }
+            if (cmd === "volume" || cmd === "setVolume" || cmd === "set_volume") return;
+          }
+        }
+        // Also handle "volume:0.8" string
+        if (typeof cmd === "string" && cmd.indexOf("volume") !== -1) {
+          var m = cmd.match(/([0-9]*\.?[0-9]+)/);
+          if (m) {
+            var v2 = parseFloat(m[1]); if (v2 > 1) v2 /= 100;
+            if (isFinite(v2)) { pendingVolume = v2; setEmbedVolume(v2); return; }
+          }
+        }
+        if (cmd === "play" || data === "play") {
+          // VB.NET compatible: same as api-soundcloud playSound()
+          playSound();
+          return;
+        }
+        if (cmd === "pause" || data === "pause") {
+          pauseSound();
+          return;
+        }
+        if (cmd === "replay" || cmd === "next" || data === "replay" || data === "next") {
+          // api-soundcloud: replaySound() and nextSound() both seek to 0 and play
+          if (cmd === "replay" || data === "replay") replaySound();
+          else nextSound();
+          return;
+        }
+        // fallback for unknown string that looks like play
+        if (typeof data === "string" && data.length < 20 && data.toLowerCase().indexOf("play") !== -1) {
+          log("Unknown play-like command, fallback play", data);
+          pendingVolume = pendingVolume || 0.9;
+          setEmbedVolume(pendingVolume);
+          playTrack();
+        }
+      }
+      // Handle embed playback updates (from Spotify iframe via postMessage)
+      function handleEmbedMessage(data) {
+        try {
+          // Spotify embed sends {type:"playback_update", payload:{isPaused, position, duration, ...}} or {type:"ready"} etc.
+          var t = data.type || data.command || "";
+          var payload = data.payload || data.data || {};
+          if (t === "playback_update" || t === "playback_started" || t === "ready") {
+            // payload may contain isPaused, position, duration (ms)
+            if (payload.isPaused != null) {
+              var wasPlaying = isPlaying;
+              isPlaying = !payload.isPaused;
+              if (isPlaying && !wasPlaying) {
+                // Resync trackStartedAt based on position
+                var posMs = payload.position != null ? payload.position : 0;
+                trackStartedAt = Date.now() - posMs;
+                log("embed playback_update: playing, pos=" + posMs + " dur=" + payload.duration);
+                // Ensure polling is running
+                if (!pollingInterval) startPolling();
+              } else if (!isPlaying) {
+                log("embed playback_update: paused");
+                // Keep polling but isPlaying false will prevent auto-ended
+              }
+            }
+            if (payload.position != null) embedLastPositionMs = payload.position;
+            if (payload.duration != null) {
+              embedLastDurationMs = payload.duration;
+              // Sync trackDurationMs if embed reports different duration
+              if (payload.duration > 0 && Math.abs(payload.duration - trackDurationMs) > 2000) {
+                trackDurationMs = payload.duration;
+                log("embed duration sync: " + trackDurationMs);
+              }
+            }
+            // Detect near-end from embed
+            if (payload.position != null && payload.duration != null && payload.duration > 0) {
+              if ((payload.duration - payload.position) <= 1200 && !payload.isPaused) {
+                log("embed near end via playback_update -> videoEnded");
+                // Small delay to ensure track truly ended
+                setTimeout(function () {
+                  if (!endedSent && isPlaying) notifyVideoEnded();
+                }, 800);
+              }
+            }
+          } else if (t === "playback_started") {
+            isPlaying = true;
+            trackStartedAt = Date.now() - (payload.position || 0);
+            if (!pollingInterval) startPolling();
+          } else if (t === "ended" || t === "track_ended" || t === "playback_ended") {
+            log("embed ended event -> videoEnded");
+            notifyVideoEnded();
+          }
+        } catch (e) { log("handleEmbedMessage err", e); }
+      }
+      function handleTrackMessage(data) {
+        try {
+          var t = null;
+          if (data.track) t = data.track;
+          else if (data.data && data.data.track) t = data.data.track;
+          else if (data.trackId || data.id) t = data;
+          else if (data.title || data.thumbnail) t = data;
+          if (!t) return false;
+          // Normalize fields from search API map_track
+          var normalized = {
+            title: t.title || t.name || null,
+            artist: t.artist || (t.artistList ? t.artistList.join(", ") : null) || t.author || null,
+            thumbnail: t.thumbnail || t.thumb || t.cover || t.image || t.thumbnail_url || null,
+            duration: t.duration || null,
+            durationMs: t.durationMs || t.duration_ms || t.durationMs === 0 ? t.durationMs : null,
+            album: t.album || null
+          };
+          var hasInfo = normalized.title || normalized.thumbnail || normalized.duration;
+          if (!hasInfo) return false;
+          log("Host track info received", normalized);
+          // Merge into initialTrack and update UI immediately
+          if (!initialTrack) initialTrack = {};
+          for (var k in normalized) { if (normalized[k] != null) initialTrack[k] = normalized[k]; }
+          // If trackId provided, update
+          if (t.trackId) trackId = t.trackId;
+          if (t.id) trackId = t.id;
+          // Update UI
+          if (normalized.thumbnail || normalized.title || normalized.duration) {
+            // Create a track-like object for updateMeta
+            var trackLike = {
+              title: normalized.title || (metaTrack && metaTrack.title) || "Unknown",
+              artist: normalized.artist || (metaTrack && metaTrack.artist) || "",
+              thumbnail: normalized.thumbnail || (metaTrack && metaTrack.thumbnail) || "",
+              duration: normalized.duration || (metaTrack && metaTrack.duration) || "0:00",
+              durationMs: normalized.durationMs || (metaTrack && metaTrack.durationMs) || 0,
+              album: normalized.album || (metaTrack && metaTrack.album) || null
+            };
+            updateMeta(trackLike);
+          }
+          return true;
+        } catch (e) { log("handleTrackMessage err", e); return false; }
+      }
+      // WebView2 bridge — SAMAKAN KONSEP api-soundcloud (VB.NET)
+      // VB.NET mengirim string plain: "play", "pause", "replay", "next" via PostWebMessageAsString
+      // dan menerima "videoEnded" via postMessage
+      if (window.chrome && window.chrome.webview) {
+        log("WebView2 bridge detected (api-soundcloud compatible)");
+        try {
+          window.chrome.webview.addEventListener("message", function (event) {
+            var data = event.data;
+            // Exact same as api-soundcloud/player.html:468
+            if (data === 'pause') { pauseSound(); return; }
+            if (data === 'play') { playSound(); return; }
+            if (data === 'replay') { replaySound(); return; }
+            if (data === 'next') { nextSound(); return; }
+            // Extended: handle JSON with type/track/volume for Spotify
+            try {
+              var parsed = null;
+              if (typeof data === "string") {
+                try { parsed = JSON.parse(data); } catch (e) { parsed = null; }
+                if (parsed) {
+                  if (parsed.track || parsed.type === "track" || parsed.type === "loadTrack" || parsed.trackId) {
+                    if (handleTrackMessage(parsed.track || parsed)) return;
+                    if (handleTrackMessage(parsed)) return;
+                  }
+                  if (parsed.type === "volume" || parsed.command === "setVolume" || parsed.volume != null) {
+                    handleHostCommand(data); return;
+                  }
+                }
+              } else if (data && (data.track || data.type === "track" || data.type === "loadTrack")) {
+                if (handleTrackMessage(data.track || data)) return;
+                if (handleTrackMessage(data)) return;
+              }
+            } catch (e) { }
+            // Fallback to generic handler (volume, track, etc.)
+            handleHostCommand(data);
+          });
+        } catch (e) { log("webview addEventListener err", e); }
+      } else {
+        log("WebView2 bridge NOT detected");
+      }
+      window.addEventListener("message", function (e) {
+        var d = e.data;
+        if (!d) return;
+        // First check if it's track info from host (search)
+        try {
+          if (typeof d === "object" && (d.track || d.type === "track" || d.type === "loadTrack")) {
+            if (handleTrackMessage(d.track || d)) return;
+          }
+          if (typeof d === "string") {
+            try {
+              var p2 = JSON.parse(d);
+              if (p2 && (p2.track || p2.type === "track" || p2.type === "loadTrack")) {
+                if (handleTrackMessage(p2.track || p2)) return;
+              }
+            } catch (e) { }
+          }
+        } catch (e) { }
+        // Distinguish embed messages (they have payload with isPaused/position) vs host commands
+        if (typeof d === "object" && (d.type === "playback_update" || d.type === "playback_started" || d.type === "ready" || d.payload)) {
+          // Check if it's embed: has payload with isPaused or position
+          if (d.payload && (d.payload.isPaused != null || d.payload.position != null)) {
+            handleEmbedMessage(d);
+            return;
+          }
+          // Also handle stringified JSON from embed
+          if (typeof d.payload === "object") { handleEmbedMessage(d); return; }
+        }
+        if (typeof d === "string") {
+          // Try parse JSON, if it's embed format, handle as embed
+          try {
+            var p = JSON.parse(d);
+            if (p && (p.type === "playback_update" || p.payload)) { handleEmbedMessage(p); return; }
+          } catch (e) { }
+          handleHostCommand(d);
+        } else if (d.type === "playback_update" || d.type === "playback_started") {
+          handleEmbedMessage(d);
+        } else if (d.type || d.command) {
+          // Host commands are simple: play, pause, volume, etc. - embed ones already handled
+          // If it looks like embed (has payload with position), don't treat as host
+          if (d.payload && d.payload.position != null) handleEmbedMessage(d);
+          else handleHostCommand(d);
+        } else {
+          handleHostCommand(d);
+        }
+      });
+
+      function init() {
+        if (!trackId) { showError("Missing trackId parameter"); return; }
+        createSkeleton();
+        fetch("/track?trackId=" + encodeURIComponent(trackId))
+          .then(function (res) { if (!res.ok) throw new Error("Track not found"); return res.json(); })
+          .then(function (track) { updateMeta(track); })
+          .catch(function (error) { console.error(error); });
+      }
+
+      window.addEventListener("beforeunload", function () { stopPolling(); });
+      window._spPlay = playTrack;
+      window._spSetVolume = setEmbedVolume;
+      window._spHandle = handleHostCommand;
+      window._spGetVolume = function () { return pendingVolume; };
+      init();
+      // Auto-set volume from query ?volume= param or postMessage early
+      setTimeout(function () { setEmbedVolume(pendingVolume); }, 800);
+    })();
+  </script>
+</body>
+
+</html>
