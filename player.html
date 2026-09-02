@@ -280,43 +280,12 @@
       }
     }
 
-    .click-hint {
-      position: fixed;
-      inset: 0;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0, 0, 0, .65);
-      color: #fff;
-      cursor: pointer;
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: .5px
-    }
-
+    .click-hint,
     .click-hint .play-ico {
-      width: 84px;
-      height: 84px;
-      border-radius: 50%;
-      background: #1db954;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 20px;
-      box-shadow: 0 12px 40px rgba(29, 185, 84, .5)
-    }
-
-    .click-hint .play-ico::after {
-      content: "";
-      display: block;
-      width: 0;
-      height: 0;
-      border-left: 26px solid #fff;
-      border-top: 16px solid transparent;
-      border-bottom: 16px solid transparent;
-      margin-left: 6px
+      display: none !important;
+      pointer-events: none !important;
+      opacity: 0 !important;
+      visibility: hidden !important
     }
 
     .error {
@@ -377,6 +346,9 @@
       var params = new URLSearchParams(location.search);
       var trackId = params.get('trackId');
       var statusEl = document.getElementById('status');
+      // STRICT 1 kolom: hanya sp_dc WAJIB dari VB (via ?sp_dc) — sp_key dihapus
+      var spDc = params.get('sp_dc') || params.get('spDC') || params.get('SP_DC') || params.get('spDc') || '';
+      var credQs = spDc ? '&sp_dc=' + encodeURIComponent(spDc) : '';
 
       var pendingVolume = 0.9;
       try {
@@ -412,8 +384,12 @@
       var metaTrack = null;
       var trackDurationMs = initialTrack && initialTrack.durationMs ? initialTrack.durationMs : 0;
       var trackStartedAt = 0, isPlaying = false, endedSent = false, pollingInterval = null;
-      var hintEl = null, hintShown = false;
+      // click-hint removed: autoplay no-gesture required
       var embedReady = false, pendingPlay = false;
+      var embedLastPositionMs = 0, embedLastDurationMs = 0;
+      // autoplay retry (jamin tidak miss, tanpa Click to Play)
+      var autoplayTimer = null, autoplayTries = 0, AUTOPLAY_MAX_TRIES = 30;
+      var userGesturePrimed = false;
 
       function log() { var a = [].slice.call(arguments); a.unshift('[SP]'); console.log.apply(console, a); }
       function setStatus(m) { if (!statusEl) return; statusEl.textContent = m || ''; if (m) { statusEl.classList.add('show'); setTimeout(function () { statusEl.classList.remove('show') }, 2200); } else statusEl.classList.remove('show'); }
@@ -441,14 +417,14 @@
         if (h) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
         return m + ':' + (s < 10 ? '0' : '') + s;
       }
-      function ensureHint() {
-        if (hintShown || hintEl) return;
-        hintShown = true;
-        hintEl = document.createElement('div'); hintEl.className = 'click-hint';
-        hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div>';
-        hintEl.addEventListener('click', function () { playSound(); if (hintEl) { hintEl.remove(); hintEl = null; } });
-        document.body.appendChild(hintEl);
-      }
+      function ensureHint() { /* disabled: autoplay tanpa Click to Play - VB tidak diubah */ return; }
+      function _removeAnyHint() { try { document.querySelectorAll('.click-hint').forEach(function (el) { el.remove(); }); } catch (e) { } }
+      // global observer: hapus Click to Play jika muncul lagi (jamin tidak ada overlay blokir autoplay)
+      try {
+        new MutationObserver(function () { _removeAnyHint(); }).observe(document.documentElement, { childList: true, subtree: true });
+        setInterval(_removeAnyHint, 800);
+        document.addEventListener('DOMContentLoaded', _removeAnyHint);
+      } catch (e) { }
       function getEmbedDoc() {
         var iframe = document.getElementById('spWidget');
         try { return iframe && iframe.contentDocument ? iframe.contentDocument : null; } catch (e) { return null; }
@@ -457,6 +433,53 @@
         var iframe = document.getElementById('spWidget');
         try { return iframe && iframe.contentWindow ? iframe.contentWindow : null; } catch (e) { return null; }
       }
+      function _primeUserGesture() {
+        if (userGesturePrimed) return;
+        userGesturePrimed = true;
+        // synthetic gesture ke dokumen utama biar WebView2 anggap ada user activation (sekali per load)
+        try {
+          ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart', 'keydown'].forEach(function (t) {
+            try { document.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (e) { try { document.dispatchEvent(new Event(t, { bubbles: true })); } catch (ee) { } }
+          });
+          var iframe = document.getElementById('spWidget');
+          if (iframe) { try { iframe.focus(); } catch (e) { } try { iframe.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (e2) { } }
+        } catch (e) { }
+      }
+      function _tryPlayAllAudio(vol) {
+        var played = 0;
+        var targetVol = isFinite(vol) ? vol : pendingVolume;
+        var docs = [];
+        var d0 = getEmbedDoc();
+        if (d0) docs.push(d0);
+        // cari iframe nested juga (Spotify embed kadang iframe dalam iframe)
+        try {
+          if (d0) d0.querySelectorAll('iframe').forEach(function (f) { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) { } });
+        } catch (e) { }
+        docs.forEach(function (doc) {
+          try {
+            doc.querySelectorAll('audio,video').forEach(function (a) {
+              try {
+                a.muted = false;
+                a.volume = Math.max(0, Math.min(1, targetVol));
+                // coba muted autoplay fallback biar tidak kena NotAllowedError
+                var p = a.play();
+                if (p && p.catch) p.catch(function (err) {
+                  log('audio.play blocked, retry muted', err && err.message);
+                  try { a.muted = true; var p2 = a.play(); if (p2 && p2.then) p2.then(function () { setTimeout(function () { try { a.muted = false; a.volume = targetVol; setEmbedVolume(targetVol); } catch (e) { } }, 650); }); } catch (e2) { }
+                });
+                played++;
+              } catch (e) { }
+            });
+            // trigger click di dalam doc juga buat bypass policy
+            try {
+              ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart'].forEach(function (t) {
+                try { doc.dispatchEvent(new MouseEvent(t, { bubbles: true })); } catch (e) { }
+              });
+            } catch (e) { }
+          } catch (e) { }
+        });
+        return played > 0;
+      }
       function setEmbedVolume(vol) {
         if (!isFinite(vol)) return;
         if (vol > 1) vol /= 100;
@@ -464,43 +487,155 @@
         var doc = getEmbedDoc(), win = getEmbedWindow();
         if (doc) {
           try {
-            doc.querySelectorAll('audio').forEach(function (a) { try { a.volume = pendingVolume; a.muted = false; } catch (e) { } });
+            doc.querySelectorAll('audio,video').forEach(function (a) { try { a.volume = pendingVolume; a.muted = false; } catch (e) { } });
             var inner = doc.querySelectorAll('iframe');
-            inner.forEach(function (f) { try { var d = f.contentDocument; if (d) d.querySelectorAll('audio').forEach(function (a) { a.volume = pendingVolume }); } catch (e) { } });
+            inner.forEach(function (f) { try { var d = f.contentDocument; if (d) d.querySelectorAll('audio,video').forEach(function (a) { try { a.volume = pendingVolume; a.muted = false; } catch (e) { } }); } catch (e) { } });
           } catch (e) { }
         }
         if (win) {
           try {
-            [{ command: 'setVolume', volume: pendingVolume }, { type: 'setVolume', volume: pendingVolume }].forEach(function (p) {
+            [{ command: 'setVolume', volume: pendingVolume }, { type: 'setVolume', volume: pendingVolume }, { command: 'setVolume', volume: pendingVolume * 100 }, { type: 'volume', volume: pendingVolume }].forEach(function (p) {
               try { win.postMessage(p, '*'); } catch (e) { }
             });
           } catch (e) { }
         }
         return true;
       }
+      // === STRICT PLAY ONLY — cegah "Saved on Spotify" ter-klik ===
+      var _BAD_LABEL_RE = /save|simpan|saved|like|heart|add|follow|share|playlist/i;
+      function _isBadButton(el) {
+        try {
+          var al = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.textContent || '')).toLowerCase();
+          return _BAD_LABEL_RE.test(al);
+        } catch (e) { return false; }
+      }
       function clickPlayInEmbed() {
         var doc = getEmbedDoc(), win = getEmbedWindow();
+        var clicked = false;
+        _primeUserGesture();
+        _tryPlayAllAudio(pendingVolume);
+        // 1) coba via postMessage dulu (paling aman, tidak salah tombol)
+        if (win) {
+          try {
+            [{ command: 'play' }, { type: 'play' }, { command: 'resume' }, { type: 'resume' }, { action: 'play' }, { event: 'play' }].forEach(function (c) { try { win.postMessage(c, '*'); win.postMessage(JSON.stringify(c), '*'); } catch (e) { } });
+          } catch (e) { }
+        }
         if (doc) {
           try {
-            var selectors = ['button[data-testid="play-pause-button"]', 'button[data-testid="play-button"]', '[data-testid="play-pause-button"]', 'button[aria-label="Play"]', '[aria-label="Play"]'];
+            // HANYA play button - whitelist ketat, blacklist save
+            var selectors = [
+              'button[data-testid="play-pause-button"]',
+              'button[data-testid="play-button"]',
+              'button[data-testid="control-button-play"]',
+              '[data-testid="play-pause-button"]',
+              '[data-testid="control-button-play"]',
+              'button[aria-label="Play"]',
+              'button[aria-label="Putar"]'
+            ];
             for (var i = 0; i < selectors.length; i++) {
-              var btn = doc.querySelector(selectors[i]);
-              if (btn) {
-                var label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                if (label.indexOf('pause') !== -1) return true;
-                btn.click(); log('Clicked', selectors[i]); return true;
+              try {
+                var btn = doc.querySelector(selectors[i]);
+                if (!btn || btn.disabled) continue;
+                if (_isBadButton(btn)) { log('skip bad btn', selectors[i]); continue; }
+                var label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase();
+                if (label.indexOf('pause') !== -1 || label.indexOf('jeda') !== -1) { clicked = true; break; }
+                // double-check bukan save
+                if (_BAD_LABEL_RE.test(label)) continue;
+                try { btn.focus(); } catch (e) { }
+                try { btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })); } catch (e) { }
+                try { btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); } catch (e) { }
+                btn.click();
+                try { btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); } catch (e) { }
+                log('Clicked PLAY', selectors[i]); clicked = true; break;
+              } catch (e) { }
+            }
+            // fallback scan HANYA tombol play — tidak lagi klik svg random
+            if (!clicked) {
+              var allBtns = doc.querySelectorAll('button');
+              for (var b = 0; b < allBtns.length; b++) {
+                try {
+                  var bx = allBtns[b];
+                  if (bx.disabled) continue;
+                  if (_isBadButton(bx)) continue;
+                  var al = (bx.getAttribute('aria-label') || bx.getAttribute('title') || '').toLowerCase();
+                  // harus mengandung play/putar dan tidak mengandung save
+                  if ((al.indexOf('play') !== -1 || al.indexOf('putar') !== -1) && !_BAD_LABEL_RE.test(al)) {
+                    if (al.indexOf('pause') !== -1 || al.indexOf('jeda') !== -1) { clicked = true; break; }
+                    bx.click(); log('Clicked fallback PLAY #' + b + ' label=' + al); clicked = true; break;
+                  }
+                } catch (e) { }
               }
             }
             doc.querySelectorAll('iframe').forEach(function (f) {
-              try { var d = f.contentDocument; if (!d) return; selectors.forEach(function (s) { var b = d.querySelector(s); if (b) b.click(); }); } catch (e) { }
+              try {
+                var d = f.contentDocument;
+                if (!d) return;
+                selectors.forEach(function (s) {
+                  try {
+                    var nb = d.querySelector(s);
+                    if (nb && !nb.disabled && !_isBadButton(nb)) {
+                      var nl = (nb.getAttribute('aria-label') || '').toLowerCase();
+                      if (_BAD_LABEL_RE.test(nl)) return;
+                      if (nl.indexOf('pause') !== -1) { clicked = true; return; }
+                      nb.click(); clicked = true;
+                    }
+                  } catch (e) { }
+                });
+                d.querySelectorAll('audio,video').forEach(function (a) { try { a.muted = false; a.volume = pendingVolume; var pp = a.play(); if (pp && pp.catch) pp.catch(function () { a.muted = true; a.play(); }); } catch (e) { } });
+              } catch (e) { }
             });
           } catch (e) { log('click err', e); }
         }
-        if (win) {
-          try { [{ command: 'play' }, { type: 'play' }].forEach(function (c) { try { win.postMessage(c, '*'); } catch (e) { } }); } catch (e) { }
-          return true;
+        if (clicked) return true;
+        // jika belum ke-klik tapi win ada, anggap sudah coba via postMessage
+        return !!win;
+      }
+      function isEmbedPlaying() {
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            var auds = doc.querySelectorAll('audio,video');
+            for (var i = 0; i < auds.length; i++) { if (!auds[i].paused && !auds[i].ended && auds[i].currentTime > 0) return true; }
+            // tombol Pause visible = sedang play
+            if (doc.querySelector('button[aria-label="Pause"],[aria-label="Pause"],button[aria-label="Jeda"]')) return true;
+          }
+        } catch (e) { }
+        if (embedLastDurationMs > 0 && embedLastPositionMs > 0 && !isPlaying) {
+          // playback_update sudah bilang play
         }
-        return false;
+        return isPlaying;
+      }
+      // === GLOBAL autoplay loop — dipakai render, Donext, videoEnded, playSound ===
+      function clearAutoplay() { if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; } log('autoplay cleared tries=' + autoplayTries + ' isPlaying=' + isPlaying); }
+      function startAutoplayLoop(reason) {
+        if (autoplayTimer) clearInterval(autoplayTimer);
+        autoplayTries = 0;
+        _removeAnyHint();
+        log('startAutoplayLoop reason=' + reason + ' embedReady=' + embedReady);
+        function _tick() {
+          if (endedSent) { clearAutoplay(); return; }
+          if (isEmbedPlaying() || isPlaying) {
+            try {
+              var doc = getEmbedDoc();
+              var trulyPlaying = false;
+              if (doc) { doc.querySelectorAll('audio,video').forEach(function (a) { if (!a.paused && !a.ended) trulyPlaying = true; }); }
+              if (trulyPlaying || isPlaying) { clearAutoplay(); return; }
+            } catch (e) { clearAutoplay(); return; }
+          }
+          if (autoplayTries >= AUTOPLAY_MAX_TRIES) { log('autoplay max tries reached, give up but keep polling for videoEnded'); clearAutoplay(); return; }
+          autoplayTries++;
+          log('autoplay tick #' + autoplayTries + ' embedReady=' + embedReady + ' pendingPlay=' + pendingPlay);
+          _primeUserGesture();
+          setEmbedVolume(pendingVolume);
+          clickPlayInEmbed();
+          _tryPlayAllAudio(pendingVolume);
+          try { var w = getEmbedWindow(); if (w) [{ command: 'play' }, { type: 'play' }].forEach(function (c) { w.postMessage(c, '*'); }); } catch (e) { }
+          try { var ifr = document.getElementById('spWidget'); if (ifr) ifr.focus(); } catch (e) { }
+          if (!isPlaying && autoplayTries >= 2) { isPlaying = true; trackStartedAt = Date.now(); endedSent = false; if (!pollingInterval) startPolling(); }
+        }
+        _tick();
+        autoplayTimer = setInterval(_tick, 550);
+        setTimeout(function () { if (autoplayTimer) { log('autoplay safety timeout clear'); clearAutoplay(); } }, 18000);
       }
 
       function render(track) {
@@ -528,104 +663,187 @@
 
         var info = document.createElement('div'); info.className = 'info'; info.id = 'info';
         info.innerHTML = '<h1>' + (track.title || 'Unknown') + '</h1><h2>' + (track.artist || '') + '</h2>';
+        // durasi pakai konsep sama seperti search (map_track format_duration) — fallback ke initialTrack jika /track oEmbed 0:00
+        var durForStats = track.duration;
+        if ((!durForStats || durForStats === '0:00') && initialTrack && initialTrack.duration) durForStats = initialTrack.duration;
         var stats = [];
-        if (track.duration) stats.push('&#9201; ' + track.duration);
+        if (durForStats && durForStats !== '0:00') stats.push('&#9201; ' + durForStats);
+        else if (trackDurationMs > 0) stats.push('&#9201; ' + fmtTime(trackDurationMs / 1000));
         if (track.album) stats.push(track.album);
         if (track.explicit) stats.push('Explicit');
-        if (stats.length) info.innerHTML += '<div class="stats">' + stats.map(function (s) { return '<span>' + s + '</span>' }).join('') + '</div>';
+        if (stats.length) info.innerHTML += '<div class="stats" id="statsRow">' + stats.map(function (s) { return '<span>' + s + '</span>' }).join('') + '</div>';
         content.appendChild(info);
 
         var player = document.createElement('div'); player.className = 'player'; player.id = 'player';
         var iframe = document.createElement('iframe');
         iframe.id = 'spWidget';
-        iframe.setAttribute('allow', 'autoplay; encrypted-media; fullscreen; clipboard-write');
+        iframe.setAttribute('allow', 'autoplay *; encrypted-media; fullscreen; clipboard-write; autoplay');
+        iframe.setAttribute('allowFullscreen', '');
         iframe.setAttribute('frameborder', '0');
         iframe.setAttribute('loading', 'eager');
-        iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(track.trackId || trackId);
+        iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(track.trackId || trackId) + credQs;
         player.appendChild(iframe);
         content.appendChild(player);
 
         log('Embed injected', iframe.src);
         embedReady = false; pendingPlay = false;
+        _removeAnyHint();
 
         iframe.onload = function () {
           log('Embed loaded');
           embedReady = true;
-          setTimeout(function () { setEmbedVolume(pendingVolume); }, 150);
-          setTimeout(function () { setEmbedVolume(pendingVolume); }, 600);
-          setTimeout(function () { setEmbedVolume(pendingVolume); }, 1500);
+          _removeAnyHint();
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 120);
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 500);
+          setTimeout(function () { setEmbedVolume(pendingVolume); }, 1200);
           setStatus('ready');
           sendToHost('embed_ready');
-          if (pendingPlay) { pendingPlay = false; setTimeout(function () { doPlayEmbed(); }, 250); }
+          if (pendingPlay) { pendingPlay = false; setTimeout(function () { startAutoplayLoop('pendingPlay'); }, 180); }
           else {
-            // autoplay seperti sebelumnya
-            setTimeout(function () { if (!endedSent) doPlayEmbed(); }, 400);
+            // AUTOPLAY LANGSUNG - tanpa Click to Play, untuk play baru & playlist reload
+            setTimeout(function () { if (!endedSent) startAutoplayLoop('initial'); }, 250);
           }
         };
-        // fallback hint jika autoplay diblokir
+        // fallback terakhir jika onload tidak fire (cache) - tetap autoplay
         setTimeout(function () {
-          if (!isPlaying) ensureHint();
-        }, 3500);
+          if (!embedReady) { log('embed onload fallback check'); var ifr = document.getElementById('spWidget'); if (ifr) { try { embedReady = true; startAutoplayLoop('fallback-no-onload'); } catch (e) { } } }
+          else if (!isPlaying && !endedSent) { _removeAnyHint(); startAutoplayLoop('fallback-not-playing'); }
+        }, 2200);
       }
 
-      function doPlayEmbed() {
+      function doPlayEmbed(forceNoClear) {
+        _removeAnyHint();
+        _primeUserGesture();
         setEmbedVolume(pendingVolume);
         clickPlayInEmbed();
-        try { document.getElementById('spWidget').focus(); } catch (e) { }
+        _tryPlayAllAudio(pendingVolume);
+        try { var ifr = document.getElementById('spWidget'); if (ifr) ifr.focus(); } catch (e) { }
+        try { document.body.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (e) { }
         isPlaying = true; trackStartedAt = Date.now(); endedSent = false;
+        if (!forceNoClear && autoplayTimer) { /* biarkan autoplay loop yang clear sendiri saat trulyPlaying */ }
         startPolling();
         setStatus('playing');
-        setTimeout(function () { setEmbedVolume(pendingVolume); }, 300);
+        setTimeout(function () { setEmbedVolume(pendingVolume); _tryPlayAllAudio(pendingVolume); }, 320);
+        setTimeout(function () { setEmbedVolume(pendingVolume); }, 900);
+        // pastikan retry tidak berhenti premature kalau audio masih paused
+        setTimeout(function () {
+          try {
+            var tru = isEmbedPlaying();
+            if (!tru) { clickPlayInEmbed(); _tryPlayAllAudio(pendingVolume); }
+            else if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; }
+          } catch (e) { }
+        }, 1100);
       }
       function startPolling() {
         stopPolling();
-        if (!trackDurationMs || trackDurationMs <= 0) return;
-        log('startPolling durationMs=' + trackDurationMs);
+        log('startPolling durationMs=' + trackDurationMs + ' embedDur=' + embedLastDurationMs);
         pollingInterval = setInterval(function () {
           if (!isPlaying || endedSent) return;
+          // gunakan duration terbaru setiap tick (biar update dari /track enrich langsung kepakai)
+          var curDur = (trackDurationMs && trackDurationMs > 0 ? trackDurationMs : 0) || embedLastDurationMs || 180000;
+          // 1) Jika ada embed position real (dari playback_update), pakai itu — paling akurat
+          if (embedLastDurationMs > 0 && embedLastPositionMs >= 0) {
+            var remain = embedLastDurationMs - embedLastPositionMs;
+            if (remain <= 1000 && isPlaying) {
+              log('embed position ' + embedLastPositionMs + '/' + embedLastDurationMs + ' near end -> videoEnded');
+              stopPolling(); notifyVideoEnded(); return;
+            }
+            if (embedLastDurationMs > 0) return; // jangan pakai wall-clock jika ada embed duration
+          }
+          // 2) Cek audio element langsung di embed (jika accessible)
+          try {
+            var doc = getEmbedDoc();
+            if (doc) {
+              var auds = doc.querySelectorAll('audio');
+              for (var i = 0; i < auds.length; i++) {
+                var a = auds[i];
+                if (isFinite(a.duration) && a.duration > 0 && isFinite(a.currentTime)) {
+                  var remA = (a.duration - a.currentTime) * 1000;
+                  if (remA <= 700 && !a.paused && !a.ended) {
+                    log('embed audio near end ' + a.currentTime + '/' + a.duration + ' -> videoEnded');
+                    stopPolling(); notifyVideoEnded(); return;
+                  }
+                  if (a.duration * 1000 > 1000 && Math.abs(a.duration * 1000 - curDur) > 2000) {
+                    // sync trackDurationMs biar tidak miss setelah enrich
+                    trackDurationMs = Math.round(a.duration * 1000);
+                    curDur = trackDurationMs;
+                  }
+                  return;
+                }
+              }
+            }
+          } catch (e) { }
+          // 3) Fallback wall-clock
           var elapsed = Date.now() - trackStartedAt;
-          if (elapsed >= trackDurationMs + 2000) {
-            log('polling elapsed ' + elapsed + ' >= ' + (trackDurationMs + 2000) + ' -> videoEnded');
+          var threshold = curDur + 2000;
+          if (elapsed >= threshold) {
+            log('polling elapsed ' + elapsed + ' >= ' + threshold + ' -> videoEnded');
             stopPolling(); notifyVideoEnded();
           }
-        }, 1000);
-        // safety hard timeout +30s
+        }, 800);
+        var curDur0 = (trackDurationMs && trackDurationMs > 0 ? trackDurationMs : 0) || embedLastDurationMs || 180000;
+        var safetyMs = curDur0 + 30000;
         setTimeout(function () {
           if (!endedSent && isPlaying) {
             var elapsed = Date.now() - trackStartedAt;
-            // jangan trigger kalau masih jauh dari durasi
-            if (elapsed < trackDurationMs + 10000) return;
-            log('hard safety trigger');
+            var effDur = (trackDurationMs && trackDurationMs > 0 ? trackDurationMs : 0) || embedLastDurationMs || curDur0;
+            if (elapsed < effDur + 10000) return;
+            log('hard safety trigger elapsed=' + elapsed + ' effDur=' + effDur);
             stopPolling(); notifyVideoEnded();
           }
-        }, trackDurationMs + 30000);
+        }, safetyMs);
       }
       function stopPolling() { if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; } }
 
-      // === VB.NET compatible API — sama seperti api-soundcloud ===
-      function playSound() { log('[VB] playSound'); endedSent = false; pendingVolume = pendingVolume || 0.9; setEmbedVolume(pendingVolume); if (!embedReady) { pendingPlay = true; log('queue play'); return; } doPlayEmbed(); }
+      // === VB.NET compatible API — sama seperti api-soundcloud (tanpa ubah VB) ===
+      function playSound() {
+        log('[VB] playSound');
+        endedSent = false;
+        pendingVolume = pendingVolume || 0.9;
+        setEmbedVolume(pendingVolume);
+        _removeAnyHint();
+        if (!embedReady) { pendingPlay = true; log('queue play until embedReady'); return; }
+        // langsung autoplay tanpa nunggu hint
+        doPlayEmbed();
+        // jika autoplay loop masih jalan, biarin dia yang jamin play
+        if (!autoplayTimer && !isEmbedPlaying()) {
+          // fallback: trigger retry loop kalau doPlayEmbed belum truly playing
+          try {
+            autoplayTries = 0;
+            if (autoplayTimer) clearInterval(autoplayTimer);
+            autoplayTimer = setInterval(function () {
+              if (isEmbedPlaying() || endedSent) { clearInterval(autoplayTimer); autoplayTimer = null; return; }
+              if (autoplayTries++ > 12) { clearInterval(autoplayTimer); autoplayTimer = null; return; }
+              _primeUserGesture(); setEmbedVolume(pendingVolume); clickPlayInEmbed(); _tryPlayAllAudio(pendingVolume);
+            }, 600);
+          } catch (e) { }
+        }
+      }
       function pauseSound() {
         log('[VB] pauseSound');
+        if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; }
         try {
           var doc = getEmbedDoc();
           if (doc) {
-            var btn = doc.querySelector('button[aria-label="Pause"]') || doc.querySelector('[aria-label="Pause"]');
+            var btn = doc.querySelector('button[aria-label="Pause"]') || doc.querySelector('[aria-label="Pause"]') || doc.querySelector('[aria-label="Jeda"]');
             if (btn) { btn.click(); }
             else { var w = getEmbedWindow(); if (w) w.postMessage({ command: 'pause' }, '*'); }
-          }
+            doc.querySelectorAll('audio,video').forEach(function (a) { try { a.pause(); } catch (e) { } });
+          } else { var w2 = getEmbedWindow(); if (w2) w2.postMessage({ command: 'pause' }, '*'); }
         } catch (e) { }
         isPlaying = false; stopPolling(); setStatus('paused');
       }
       function replaySound() {
         log('[VB] replaySound -> seek 0 + play');
         endedSent = false; isPlaying = false; trackStartedAt = Date.now();
+        _removeAnyHint();
         var iframe = document.getElementById('spWidget');
         if (iframe) {
           try {
             var win = getEmbedWindow(), doc = getEmbedDoc();
             var seekOk = false;
             if (win) {
-              try { win.postMessage({ command: 'seek', position: 0 }, '*'); win.postMessage({ command: 'seekTo', seconds: 0 }, '*'); seekOk = true; } catch (e) { }
+              try { win.postMessage({ command: 'seek', position: 0 }, '*'); win.postMessage({ command: 'seekTo', seconds: 0 }, '*'); win.postMessage({ type: 'seek', position: 0 }, '*'); seekOk = true; } catch (e) { }
             }
             if (doc) {
               try {
@@ -635,48 +853,113 @@
               } catch (e) { }
             }
             if (seekOk) {
-              setTimeout(function () { setEmbedVolume(pendingVolume); doPlayEmbed(); }, 250);
+              setTimeout(function () { setEmbedVolume(pendingVolume); doPlayEmbed(true); _tryPlayAllAudio(pendingVolume); if (!isEmbedPlaying()) startAutoplayLoop('replaySeek'); }, 260);
+              setTimeout(function () { if (!isEmbedPlaying() && !endedSent) { log('replaySeek fallback autoplay'); startAutoplayLoop('replayFallback'); } }, 900);
             } else {
-              iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(trackId) + '&t=' + Date.now();
-              pendingPlay = true; isPlaying = false;
+              iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(trackId) + credQs + '&t=' + Date.now();
+              pendingPlay = true; isPlaying = false; embedReady = false; autoplayTries = 0;
+              setTimeout(function () { if (!isPlaying && !endedSent && !autoplayTimer) { log('replayReload fallback autoplay'); startAutoplayLoop('replayReload'); } }, 1400);
             }
-          } catch (e) { try { iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(trackId) + '&t=' + Date.now(); pendingPlay = true; } catch (ee) { } }
+          } catch (e) { try { iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(trackId) + credQs + '&t=' + Date.now(); pendingPlay = true; embedReady = false; } catch (ee) { } }
         } else { playSound(); }
       }
-      function nextSound() { log('[VB] nextSound'); try { sendToHost('nextRequested'); } catch (e) { } replaySound(); }
+      function nextSound() { log('[VB] nextSound/nextVideo -> replay+autoplay'); try { sendToHost('nextRequested'); } catch (e) { } replaySound(); }
 
       document.getElementById('btnPlay').addEventListener('click', playSound);
       document.getElementById('btnPrev').addEventListener('click', pauseSound);
       document.getElementById('btnReplay').addEventListener('click', replaySound);
       document.getElementById('btnNext').addEventListener('click', nextSound);
 
+      // Terima playback_update dari Spotify embed (auto-sync duration/position biar polling akurat untuk playlist)
+      function handleEmbedMessage(data) {
+        try {
+          var t = data && (data.type || data.command) || '';
+          var payload = (data && (data.payload || data.data)) || {};
+          if (t === 'playback_update' || t === 'playback_started' || t === 'ready') {
+            if (payload.isPaused != null) {
+              var wasPlaying = isPlaying;
+              isPlaying = !payload.isPaused;
+              if (isPlaying) {
+                _removeAnyHint();
+                if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; log('autoplay cleared by playback_update isPlaying'); }
+                if (!wasPlaying) {
+                  var pos = payload.position != null ? payload.position : 0;
+                  trackStartedAt = Date.now() - pos;
+                  if (!pollingInterval) startPolling();
+                }
+              }
+            } else if (payload.position != null && !payload.isPaused) {
+              // embed ngasih posisi tapi tidak isPaused -> anggap playing
+              if (!isPlaying) {
+                isPlaying = true; trackStartedAt = Date.now() - (payload.position || 0);
+                if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; }
+                if (!pollingInterval) startPolling();
+              }
+            }
+            if (payload.position != null) embedLastPositionMs = payload.position;
+            if (payload.duration != null && payload.duration > 0) {
+              embedLastDurationMs = payload.duration;
+              if (Math.abs(payload.duration - trackDurationMs) > 2000) {
+                trackDurationMs = payload.duration;
+                log('embed duration sync trackDurationMs=' + trackDurationMs);
+              }
+            }
+            if (payload.position != null && payload.duration != null && payload.duration > 0 && (payload.duration - payload.position) <= 1200 && !payload.isPaused) {
+              setTimeout(function () { if (!endedSent && isPlaying) { stopPolling(); notifyVideoEnded(); } }, 500);
+            }
+            // ready dengan isPaused false = autoplay sukses
+            if (t === 'ready' && payload.isPaused === false) {
+              if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null; }
+            }
+          } else if (t === 'ended' || t === 'track_ended' || t === 'playback_ended') {
+            log('embed ended event'); notifyVideoEnded();
+          }
+        } catch (e) { }
+      }
+      window.addEventListener('message', function (e) {
+        var d = e.data; if (!d) return;
+        // filter embed playback_update (jangan diteruskan ke handleHostCommand)
+        if (typeof d === 'object' && d !== null && (d.type === 'playback_update' || d.type === 'playback_started' || d.type === 'ready' || d.type === 'ended' || d.payload)) {
+          handleEmbedMessage(d); return;
+        }
+        if (typeof d === 'string') {
+          try { var pd = JSON.parse(d); if (pd && (pd.type === 'playback_update' || pd.payload)) { handleEmbedMessage(pd); return; } } catch (ee) { }
+        }
+      });
+
+      function _normCmd(s) { try { return (s || '').toString().trim().toLowerCase(); } catch (e) { return ''; } }
       function handleHostCommand(data) {
         var cmd = null, payload = null;
         if (typeof data === 'string') {
           try { var p = JSON.parse(data); if (p && p.type) cmd = p.type; else if (p && p.command) cmd = p.command; else cmd = data; payload = p; } catch (e) { cmd = data; }
-        } else if (data && typeof data === 'object') { cmd = data.type || data.command || data.action || data.message; payload = data; }
+        } else if (data && typeof data === 'object') { cmd = data.type || data.command || data.action || data.message || data.cmd; payload = data; }
         if (payload && (payload.volume != null || payload.value != null)) {
           var v = parseFloat(payload.volume != null ? payload.volume : payload.value);
-          if (isFinite(v)) { if (v > 1) v /= 100; pendingVolume = Math.max(0, Math.min(1, v)); setEmbedVolume(pendingVolume); if (cmd === 'volume' || cmd === 'setVolume') return; }
+          if (isFinite(v)) { if (v > 1) v /= 100; pendingVolume = Math.max(0, Math.min(1, v)); setEmbedVolume(pendingVolume); if (_normCmd(cmd) === 'volume' || _normCmd(cmd) === 'setvolume') return; }
         }
-        if (typeof cmd === 'string' && cmd.indexOf('volume') !== -1) {
+        if (typeof cmd === 'string' && cmd.toLowerCase().indexOf('volume') !== -1) {
           var m = cmd.match(/([0-9]*\.?[0-9]+)/); if (m) { var v2 = parseFloat(m[1]); if (v2 > 1) v2 /= 100; if (isFinite(v2)) pendingVolume = v2; setEmbedVolume(v2); return; }
         }
-        if (cmd === 'play' || data === 'play') { playSound(); return; }
-        if (cmd === 'pause' || data === 'pause') { pauseSound(); return; }
-        if (cmd === 'replay' || cmd === 'next' || data === 'replay' || data === 'next') { if (cmd === 'replay' || data === 'replay') replaySound(); else nextSound(); return; }
+        var ncmd = _normCmd(cmd);
+        var ndata = _normCmd(data);
+        // normalize VB aliases: play / pause / replay / repeat / next / nextVideo / nextSound / skip / donext
+        if (ncmd === 'play' || ndata === 'play') { playSound(); return; }
+        if (ncmd === 'pause' || ndata === 'pause') { pauseSound(); return; }
+        if (ncmd === 'replay' || ncmd === 'repeat' || ncmd === 'restart' || ndata === 'replay' || ndata === 'repeat') { replaySound(); return; }
+        if (ncmd === 'next' || ncmd === 'nextvideo' || ncmd === 'nextsound' || ncmd === 'skip' || ncmd === 'donext' || ncmd === 'nexttrack' || ndata === 'next' || ndata === 'nextvideo' || ndata === 'nextsound') { nextSound(); return; }
       }
 
-      // WebView2 bridge — SAMA PERSIS dengan api-soundcloud
+      // WebView2 bridge — diperluas untuk nextVideo alias VB tanpa ubah VB
       if (window.chrome && window.chrome.webview) {
         log('WebView2 bridge detected');
         try {
           window.chrome.webview.addEventListener('message', function (event) {
             var data = event.data;
-            if (data === 'pause') { pauseSound(); return; }
-            if (data === 'play') { playSound(); return; }
-            if (data === 'replay') { replaySound(); return; }
-            if (data === 'next') { nextSound(); return; }
+            var nd = _normCmd(data);
+            if (nd === 'pause') { pauseSound(); return; }
+            if (nd === 'play') { playSound(); return; }
+            if (nd === 'replay' || nd === 'repeat') { replaySound(); return; }
+            if (nd === 'next' || nd === 'nextvideo' || nd === 'nextsound' || nd === 'skip' || nd === 'donext') { log('[VB] nextVideo alias -> nextSound'); nextSound(); return; }
             try {
               var parsed = null;
               if (typeof data === 'string') { try { parsed = JSON.parse(data); } catch (e) { } if (parsed && parsed.volume != null) { handleHostCommand(data); return; } }
@@ -691,14 +974,18 @@
         var d = e.data; if (!d) return;
         if (typeof d === 'object' && (d.type === 'playback_update' || d.type === 'ready' || d.payload)) return;
         if (typeof d === 'string') {
-          if (d === 'pause' || d === 'play' || d === 'replay' || d === 'next') { handleHostCommand(d); return; }
-          try { var p2 = JSON.parse(d); if (p2 && (p2.type === 'play' || p2.type === 'pause')) { handleHostCommand(d); return; } } catch (e) { }
+          var nd2 = _normCmd(d);
+          if (nd2 === 'pause' || nd2 === 'play' || nd2 === 'replay' || nd2 === 'repeat' || nd2 === 'next' || nd2 === 'nextvideo' || nd2 === 'nextsound' || nd2 === 'skip' || nd2 === 'donext') { handleHostCommand(d); return; }
+          try { var p2 = JSON.parse(d); if (p2 && (p2.type === 'play' || p2.type === 'pause' || _normCmd(p2.type) === 'nextvideo')) { handleHostCommand(d); return; } } catch (e) { }
         }
         handleHostCommand(d);
       });
 
-      // init
+      // init — STRICT 1 kolom: hanya sp_dc wajib (VB harus bawa dari DB, search anon)
       if (!trackId) { showError('Missing trackId parameter'); }
+      else if (!spDc) {
+        showError('Missing sp_dc — room belum dikonfigurasi. Hubungi admin untuk isi sp_dc di DB room (1 kolom).');
+      }
       else {
         // kalau initialTrack sudah ada (dari VB), render langsung biar tidak nunggu fetch
         if (initialTrack && initialTrack.title) {
@@ -712,10 +999,34 @@
             explicit: false,
             trackId: trackId
           });
-          // fetch tetap untuk enrich data akurat
-          fetch('/track?trackId=' + encodeURIComponent(trackId)).then(function (r) { if (!r.ok) throw new Error('Track not found'); return r.json(); }).then(function (t) { metaTrack = t; if (t.durationMs) trackDurationMs = t.durationMs; var art = t.thumbnail; if (art) { var img = document.querySelector('#artwork img'); if (img) img.src = art; document.getElementById('bg').style.backgroundImage = "url('" + art.replace(/'/g, "\\'") + "')"; } var h1 = document.querySelector('.info h1'); if (h1 && t.title) h1.textContent = t.title; var h2 = document.querySelector('.info h2'); if (h2 && t.artist) h2.textContent = t.artist; }).catch(function () { });
+          // fetch tetap untuk enrich data akurat (bawa creds) — update durasi pakai konsep sama seperti search
+          fetch('/track?trackId=' + encodeURIComponent(trackId) + credQs).then(function (r) { if (!r.ok) throw new Error('Track not found'); return r.json(); }).then(function (t) {
+            metaTrack = t;
+            if (t.durationMs && t.durationMs > 0) {
+              trackDurationMs = t.durationMs;
+              // update polling jika sudah jalan dengan fallback 180s
+              if (isPlaying && !endedSent && !pollingInterval) startPolling();
+            }
+            var art = t.thumbnail; if (art) { var img = document.querySelector('#artwork img'); if (img) img.src = art; document.getElementById('bg').style.backgroundImage = "url('" + art.replace(/'/g, "\\'") + "')"; }
+            var h1 = document.querySelector('.info h1'); if (h1 && t.title) h1.textContent = t.title;
+            var h2 = document.querySelector('.info h2'); if (h2 && t.artist) h2.textContent = t.artist;
+            // update stats durasi biar sama seperti search (jangan tetap 0:00)
+            var statsEl = document.getElementById('statsRow') || document.querySelector('.info .stats');
+            var durText = t.duration && t.duration !== '0:00' ? t.duration : (t.durationMs ? fmtTime(t.durationMs / 1000) : '');
+            if (durText && statsEl) {
+              // replace first stat jika sudah ada ⏱, atau tambahkan
+              if (statsEl.textContent.indexOf('⏱') !== -1) {
+                statsEl.innerHTML = statsEl.innerHTML.replace(/⏱[^<]*/, '⏱ ' + durText);
+              } else {
+                var sp = document.createElement('span'); sp.innerHTML = '&#9201; ' + durText; statsEl.insertBefore(sp, statsEl.firstChild);
+              }
+            } else if (durText && !statsEl) {
+              var infoEl = document.getElementById('info');
+              if (infoEl) { var ns = document.createElement('div'); ns.className = 'stats'; ns.id = 'statsRow'; ns.innerHTML = '<span>&#9201; ' + durText + '</span>'; infoEl.appendChild(ns); }
+            }
+          }).catch(function () { });
         } else {
-          fetch('/track?trackId=' + encodeURIComponent(trackId)).then(function (res) { if (!res.ok) throw new Error('Track not found (HTTP ' + res.status + ')'); return res.json(); }).then(render).catch(function (e) { showError(e.message); });
+          fetch('/track?trackId=' + encodeURIComponent(trackId) + credQs).then(function (res) { if (!res.ok) throw new Error('Track not found (HTTP ' + res.status + ')'); return res.json(); }).then(render).catch(function (e) { showError(e.message); });
         }
       }
     })();
