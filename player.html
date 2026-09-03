@@ -259,6 +259,26 @@
       background: #1db954;
     }
 
+    /* Animasi replay */
+    @keyframes replayPulse {
+      0% {
+        transform: scale(1);
+      }
+
+      50% {
+        transform: scale(1.2);
+        background: rgba(255, 255, 255, .3);
+      }
+
+      100% {
+        transform: scale(1);
+      }
+    }
+
+    #btnReplay.replaying {
+      animation: replayPulse 0.4s ease;
+    }
+
     .loading {
       color: rgba(255, 255, 255, .8);
       font-size: 14px;
@@ -307,10 +327,10 @@
     </div>
   </div>
   <div id="controls">
-    <button class="ctl-btn" id="btnReplay" title="Replay">&#9198;</button>
-    <button class="ctl-btn" id="btnPrev" title="Pause">&#9208;</button>
-    <button class="ctl-btn main" id="btnPlay" title="Play">&#9654;</button>
-    <button class="ctl-btn" id="btnNext" title="Next">&#9197;</button>
+    <button class="ctl-btn" id="btnReplay" title="Replay">⟳</button>
+    <button class="ctl-btn" id="btnPrev" title="Pause">⏸</button>
+    <button class="ctl-btn main" id="btnPlay" title="Play">▶</button>
+    <button class="ctl-btn" id="btnNext" title="Next">⏭</button>
   </div>
 
   <script>
@@ -330,6 +350,8 @@
       // ===== DOM =====
       var loadingWrap = document.getElementById('loadingWrap');
       var bgEl = document.getElementById('bg');
+      var btnReplay = document.getElementById('btnReplay');
+      var btnPlay = document.getElementById('btnPlay');
 
       function log(msg) { console.log('[SP]', msg); }
 
@@ -349,6 +371,10 @@
         if (endedSent) return;
         endedSent = true;
         isPlaying = false;
+        if (btnPlay) {
+          btnPlay.innerHTML = '▶';
+          btnPlay.classList.remove('playing');
+        }
         sendToHost('videoEnded');
         try {
           window.dispatchEvent(new CustomEvent('videoEnded', { detail: { trackId: trackId } }));
@@ -392,6 +418,16 @@
         return false;
       }
 
+      function getMediaElement() {
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            return doc.querySelector('audio, video');
+          }
+        } catch (e) { }
+        return null;
+      }
+
       // ===== PLAY / PAUSE =====
       function playSound() {
         log('Play called');
@@ -401,6 +437,11 @@
         }
 
         endedSent = false;
+        isPlaying = true;
+        if (btnPlay) {
+          btnPlay.innerHTML = '⏸';
+          btnPlay.classList.add('playing');
+        }
 
         var iframe = getIframe();
         if (iframe) {
@@ -444,6 +485,10 @@
         setTimeout(function () {
           if (isActuallyPlaying()) {
             isPlaying = true;
+            if (btnPlay) {
+              btnPlay.innerHTML = '⏸';
+              btnPlay.classList.add('playing');
+            }
             log('Playback confirmed');
           } else {
             log('Playback not confirmed');
@@ -454,6 +499,10 @@
       function pauseSound() {
         log('Pause called');
         isPlaying = false;
+        if (btnPlay) {
+          btnPlay.innerHTML = '▶';
+          btnPlay.classList.remove('playing');
+        }
 
         var iframe = getIframe();
         if (iframe) {
@@ -472,29 +521,142 @@
         } catch (e) { }
       }
 
+      // ===== REPLAY =====
       function replaySound() {
         log('Replay called');
-        if (!embedReady) return;
-        endedSent = false;
-        isPlaying = false;
 
+        // Animasi tombol replay
+        if (btnReplay) {
+          btnReplay.classList.remove('replaying');
+          void btnReplay.offsetWidth;
+          btnReplay.classList.add('replaying');
+          setTimeout(function () {
+            btnReplay.classList.remove('replaying');
+          }, 400);
+        }
+
+        endedSent = false;
+        isPlaying = true;
+        if (btnPlay) {
+          btnPlay.innerHTML = '⏸';
+          btnPlay.classList.add('playing');
+        }
+
+        var media = getMediaElement();
+
+        if (media) {
+          try {
+            // Reset ke awal
+            media.currentTime = 0;
+
+            // Play dari awal
+            var playPromise = media.play();
+            if (playPromise !== undefined) {
+              playPromise.then(function () {
+                log('Replay: success, playing from 0');
+                isPlaying = true;
+                if (btnPlay) {
+                  btnPlay.innerHTML = '⏸';
+                  btnPlay.classList.add('playing');
+                }
+              }).catch(function (err) {
+                log('Replay: play failed - ' + err.message);
+                replayFallback();
+              });
+            }
+            return;
+          } catch (e) {
+            log('Replay: media error - ' + e.message);
+          }
+        }
+
+        // Fallback
+        replayFallback();
+      }
+
+      function replayFallback() {
+        log('Replay: using fallback');
+
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            // Cari tombol play
+            var selectors = [
+              'button[data-testid="play-pause-button"]',
+              'button[data-testid="play-button"]',
+              'button[aria-label="Play"]',
+              'button[aria-label="Putar"]'
+            ];
+
+            for (var i = 0; i < selectors.length; i++) {
+              try {
+                var btn = doc.querySelector(selectors[i]);
+                if (btn && !btn.disabled) {
+                  var label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                  if (label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
+                    btn.click();
+                    log('Replay: button clicked');
+                    isPlaying = true;
+                    if (btnPlay) {
+                      btnPlay.innerHTML = '⏸';
+                      btnPlay.classList.add('playing');
+                    }
+                    return;
+                  }
+                }
+              } catch (e) { }
+            }
+
+            // Coba audio element lagi
+            var media = doc.querySelector('audio, video');
+            if (media) {
+              media.currentTime = 0;
+              media.play().catch(function () { });
+              isPlaying = true;
+              if (btnPlay) {
+                btnPlay.innerHTML = '⏸';
+                btnPlay.classList.add('playing');
+              }
+              return;
+            }
+          }
+        } catch (e) {
+          log('Replay fallback error: ' + e.message);
+        }
+
+        // Ultimate fallback: reload embed
         var iframe = getIframe();
         if (iframe) {
-          iframe.src = '/embed-proxy?trackId=' + encodeURIComponent(trackId) + credQs + '&t=' + Date.now();
-          embedReady = false;
-          iframe.onload = function () {
-            embedReady = true;
+          var src = iframe.src;
+          iframe.src = 'about:blank';
+          setTimeout(function () {
+            iframe.src = src;
+            log('Replay: embed reloaded');
+            embedReady = false;
             setTimeout(function () {
-              playSound();
-            }, 500);
-          };
+              embedReady = true;
+              setTimeout(function () {
+                playSound();
+              }, 500);
+            }, 1500);
+          }, 300);
         }
       }
 
       function nextSound() {
         log('Next called');
         sendToHost('nextRequested');
-        replaySound();
+        setTimeout(function () {
+          replaySound();
+        }, 500);
+      }
+
+      function togglePlay() {
+        if (isPlaying) {
+          pauseSound();
+        } else {
+          playSound();
+        }
       }
 
       // ===== MONITOR PLAYBACK =====
@@ -508,6 +670,10 @@
 
           if (playing && !isPlaying) {
             isPlaying = true;
+            if (btnPlay) {
+              btnPlay.innerHTML = '⏸';
+              btnPlay.classList.add('playing');
+            }
             log('Playback detected');
           }
 
@@ -626,7 +792,7 @@
       }
 
       // ===== CONTROLS =====
-      document.getElementById('btnPlay').addEventListener('click', playSound);
+      document.getElementById('btnPlay').addEventListener('click', togglePlay);
       document.getElementById('btnPrev').addEventListener('click', pauseSound);
       document.getElementById('btnReplay').addEventListener('click', replaySound);
       document.getElementById('btnNext').addEventListener('click', nextSound);
@@ -640,9 +806,17 @@
           var payload = data.payload || data.data || {};
           if (payload.isPaused === false) {
             isPlaying = true;
+            if (btnPlay) {
+              btnPlay.innerHTML = '⏸';
+              btnPlay.classList.add('playing');
+            }
           }
           if (payload.isPaused === true) {
             isPlaying = false;
+            if (btnPlay) {
+              btnPlay.innerHTML = '▶';
+              btnPlay.classList.remove('playing');
+            }
           }
           if (payload.duration && payload.position &&
             (payload.duration - payload.position) <= 800 &&
@@ -665,6 +839,7 @@
         if (cmd === 'pause') { pauseSound(); return; }
         if (cmd === 'replay' || cmd === 'repeat') { replaySound(); return; }
         if (cmd === 'next' || cmd === 'nextvideo' || cmd === 'nextsound' || cmd === 'skip') { nextSound(); return; }
+        if (cmd === 'toggle' || cmd === 'playpause') { togglePlay(); return; }
       }
 
       if (window.chrome && window.chrome.webview) {
@@ -687,14 +862,19 @@
         if (e.target.tagName === 'INPUT') return;
         if (e.key === ' ' || e.key === 'Space') {
           e.preventDefault();
-          if (isPlaying) {
-            pauseSound();
-          } else {
-            playSound();
-          }
+          togglePlay();
         }
-        if (e.key === 'ArrowRight') { nextSound(); }
-        if (e.key === 'ArrowLeft') { replaySound(); }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          nextSound();
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          replaySound();
+        }
+        if (e.key === 'r' || e.key === 'R') {
+          replaySound();
+        }
       });
 
       // ===== INIT =====
