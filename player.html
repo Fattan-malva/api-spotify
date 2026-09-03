@@ -280,58 +280,6 @@
       }
     }
 
-    /* Click hint - seperti SoundCloud */
-    .click-hint {
-      position: fixed;
-      inset: 0;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0, 0, 0, .75);
-      color: #fff;
-      cursor: pointer;
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: .5px;
-      backdrop-filter: blur(4px);
-    }
-
-    .click-hint .play-ico {
-      width: 84px;
-      height: 84px;
-      border-radius: 50%;
-      background: #1db954;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 20px;
-      box-shadow: 0 12px 40px rgba(29, 185, 84, .4);
-      transition: transform .2s;
-    }
-
-    .click-hint .play-ico:hover {
-      transform: scale(1.05);
-    }
-
-    .click-hint .play-ico::after {
-      content: "";
-      display: block;
-      width: 0;
-      height: 0;
-      border-left: 26px solid #fff;
-      border-top: 16px solid transparent;
-      border-bottom: 16px solid transparent;
-      margin-left: 6px;
-    }
-
-    .click-hint .sub {
-      font-size: 14px;
-      opacity: .6;
-      margin-top: 8px;
-    }
-
     .error {
       color: #fff;
       font-size: 16px;
@@ -392,22 +340,11 @@
       var trackId = params.get('trackId');
       var spDc = params.get('sp_dc') || params.get('spDC') || '';
       var credQs = spDc ? '&sp_dc=' + encodeURIComponent(spDc) : '';
-      var targetVolume = 0.9;
-
-      try {
-        var v = parseFloat(params.get('volume'));
-        if (isFinite(v)) {
-          if (v > 1) v /= 100;
-          targetVolume = Math.max(0, Math.min(1, v));
-        }
-      } catch (e) { }
 
       // ===== STATE =====
       var isPlaying = false;
       var endedSent = false;
       var embedReady = false;
-      var hintShown = false;
-      var hintEl = null;
       var checkInterval = null;
 
       // ===== DOM =====
@@ -458,32 +395,6 @@
         document.getElementById('content').appendChild(err);
       }
 
-      // ===== CLICK HINT - seperti SoundCloud =====
-      function ensureHint() {
-        if (hintShown || hintEl) return;
-        hintShown = true;
-        hintEl = document.createElement('div');
-        hintEl.className = 'click-hint';
-        hintEl.innerHTML = '<div class="play-ico"></div><div>Click to play</div><div class="sub">Allow autoplay if prompted</div>';
-        hintEl.addEventListener('click', function () {
-          playSound();
-          if (hintEl) {
-            hintEl.remove();
-            hintEl = null;
-          }
-        });
-        document.body.appendChild(hintEl);
-        log('Click hint shown');
-      }
-
-      function removeHint() {
-        if (hintEl) {
-          hintEl.remove();
-          hintEl = null;
-        }
-        hintShown = true;
-      }
-
       // ===== EMBED HELPERS =====
       function getIframe() {
         return document.getElementById('spWidget');
@@ -492,99 +403,6 @@
       function getEmbedDoc() {
         var iframe = getIframe();
         try { return iframe && iframe.contentDocument ? iframe.contentDocument : null; } catch (e) { return null; }
-      }
-
-      function getEmbedWin() {
-        var iframe = getIframe();
-        try { return iframe && iframe.contentWindow ? iframe.contentWindow : null; } catch (e) { return null; }
-      }
-
-      function setVolume(vol) {
-        if (!isFinite(vol)) return;
-        if (vol > 1) vol /= 100;
-        targetVolume = Math.max(0, Math.min(1, vol));
-
-        var doc = getEmbedDoc();
-        if (doc) {
-          try {
-            doc.querySelectorAll('audio,video').forEach(function (a) {
-              a.volume = targetVolume;
-              a.muted = false;
-            });
-          } catch (e) { }
-        }
-
-        var win = getEmbedWin();
-        if (win) {
-          try { win.postMessage({ command: 'setVolume', volume: targetVolume }, '*'); } catch (e) { }
-        }
-      }
-
-      // ===== PLAY / PAUSE =====
-      function clickPlayButton() {
-        var doc = getEmbedDoc();
-        var win = getEmbedWin();
-
-        if (win) {
-          try {
-            win.postMessage({ command: 'play' }, '*');
-            win.postMessage({ type: 'play' }, '*');
-          } catch (e) { }
-        }
-
-        if (doc) {
-          var selectors = [
-            'button[data-testid="play-pause-button"]',
-            'button[data-testid="play-button"]',
-            'button[aria-label="Play"]',
-            'button[aria-label="Putar"]'
-          ];
-
-          for (var i = 0; i < selectors.length; i++) {
-            try {
-              var btn = doc.querySelector(selectors[i]);
-              if (btn && !btn.disabled) {
-                var label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                if (label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
-                  btn.click();
-                  log('Play clicked');
-                  return true;
-                }
-              }
-            } catch (e) { }
-          }
-
-          var allBtns = doc.querySelectorAll('button');
-          for (var b = 0; b < allBtns.length; b++) {
-            try {
-              var bx = allBtns[b];
-              if (bx.disabled) continue;
-              var label = (bx.getAttribute('aria-label') || bx.getAttribute('title') || '').toLowerCase();
-              if ((label.indexOf('play') !== -1 || label.indexOf('putar') !== -1) &&
-                label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
-                bx.click();
-                log('Play clicked fallback');
-                return true;
-              }
-            } catch (e) { }
-          }
-        }
-        return false;
-      }
-
-      function clickPauseButton() {
-        var doc = getEmbedDoc();
-        var win = getEmbedWin();
-
-        if (win) {
-          try { win.postMessage({ command: 'pause' }, '*'); } catch (e) { }
-        }
-
-        if (doc) {
-          var btn = doc.querySelector('button[aria-label="Pause"], button[aria-label="Jeda"]');
-          if (btn) btn.click();
-          doc.querySelectorAll('audio,video').forEach(function (a) { try { a.pause(); } catch (e) { } });
-        }
       }
 
       function isActuallyPlaying() {
@@ -606,37 +424,87 @@
         return false;
       }
 
+      // ===== PLAY / PAUSE =====
       function playSound() {
         log('Play called');
         if (!embedReady) {
-          log('Embed not ready, showing hint');
-          ensureHint();
+          log('Embed not ready');
           return;
         }
 
         endedSent = false;
-        removeHint();
-        setVolume(targetVolume);
-        clickPlayButton();
+        setStatus('playing');
 
-        // Check if actually playing after delay
+        var iframe = getIframe();
+        if (iframe) {
+          try {
+            iframe.contentWindow.postMessage({ command: 'play' }, 'https://open.spotify.com');
+            log('Play: postMessage sent');
+          } catch (e) {
+            log('Play: postMessage failed - ' + e.message);
+          }
+        }
+
+        // Coba klik tombol play di dalam iframe
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            var selectors = [
+              'button[data-testid="play-pause-button"]',
+              'button[data-testid="play-button"]',
+              'button[aria-label="Play"]',
+              'button[aria-label="Putar"]'
+            ];
+            for (var i = 0; i < selectors.length; i++) {
+              try {
+                var btn = doc.querySelector(selectors[i]);
+                if (btn && !btn.disabled) {
+                  var label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                  if (label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
+                    btn.click();
+                    log('Play: button clicked');
+                    isPlaying = true;
+                    break;
+                  }
+                }
+              } catch (e) { }
+            }
+          }
+        } catch (e) {
+          log('Play: cannot access iframe DOM - ' + e.message);
+        }
+
         setTimeout(function () {
-          if (!isActuallyPlaying()) {
-            log('Not playing, showing hint');
-            ensureHint();
-          } else {
+          if (isActuallyPlaying()) {
             isPlaying = true;
             setStatus('playing');
+            log('Playback confirmed');
+          } else {
+            log('Playback not confirmed');
           }
-        }, 1500);
+        }, 1000);
       }
 
       function pauseSound() {
         log('Pause called');
-        removeHint();
         isPlaying = false;
         setStatus('paused');
-        clickPauseButton();
+
+        var iframe = getIframe();
+        if (iframe) {
+          try {
+            iframe.contentWindow.postMessage({ command: 'pause' }, 'https://open.spotify.com');
+          } catch (e) { }
+        }
+
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            var btn = doc.querySelector('button[aria-label="Pause"], button[aria-label="Jeda"]');
+            if (btn) btn.click();
+            doc.querySelectorAll('audio,video').forEach(function (a) { try { a.pause(); } catch (e) { } });
+          }
+        } catch (e) { }
       }
 
       function replaySound() {
@@ -644,7 +512,6 @@
         if (!embedReady) return;
         endedSent = false;
         isPlaying = false;
-        removeHint();
 
         var iframe = getIframe();
         if (iframe) {
@@ -652,7 +519,7 @@
           embedReady = false;
           iframe.onload = function () {
             embedReady = true;
-            setVolume(targetVolume);
+            setStatus('ready');
             setTimeout(function () {
               playSound();
             }, 500);
@@ -666,7 +533,7 @@
         replaySound();
       }
 
-      // ===== MONITOR PLAYBACK - seperti SoundCloud check =====
+      // ===== MONITOR PLAYBACK =====
       function startMonitoring() {
         if (checkInterval) clearInterval(checkInterval);
 
@@ -678,13 +545,11 @@
           if (playing && !isPlaying) {
             isPlaying = true;
             setStatus('playing');
-            removeHint();
             log('Playback detected');
           }
 
           if (!playing && isPlaying) {
             // Mungkin pause atau ended
-            // Tapi jangan auto-reset, biar user control
           }
 
           // Cek ended via audio element
@@ -757,55 +622,44 @@
         iframe.onload = function () {
           log('Embed loaded');
           embedReady = true;
-          setVolume(targetVolume);
           setStatus('ready');
           sendToHost('embed_ready');
-
-          // Mulai monitoring
           startMonitoring();
 
-          // Coba play otomatis
+          // ===== AUTO-PLAY: delay 1 detik lalu trigger play =====
           setTimeout(function () {
-            if (!isActuallyPlaying()) {
-              log('Auto-play attempt');
-              clickPlayButton();
-              // Jika masih tidak play, show hint
-              setTimeout(function () {
-                if (!isActuallyPlaying() && !hintShown) {
-                  ensureHint();
-                } else {
-                  isPlaying = true;
-                  setStatus('playing');
-                  removeHint();
-                }
-              }, 2000);
+            log('Auto-play: triggering playSound after 1s delay');
+
+            // Trigger click pada btnPlay
+            var btnPlay = document.getElementById('btnPlay');
+            if (btnPlay) {
+              btnPlay.click();
+              log('Auto-play: btnPlay.click() triggered');
             } else {
-              isPlaying = true;
-              setStatus('playing');
-              removeHint();
+              // Fallback: panggil langsung
+              playSound();
+              log('Auto-play: playSound() called directly');
             }
           }, 1000);
         };
 
-        // Fallback
+        // Fallback: jika onload tidak terpanggil
         setTimeout(function () {
           if (!embedReady) {
-            log('Embed onload fallback');
+            log('Embed onload fallback triggered');
             embedReady = true;
-            setVolume(targetVolume);
+            setStatus('ready');
             startMonitoring();
+
             setTimeout(function () {
-              clickPlayButton();
-              setTimeout(function () {
-                if (!isActuallyPlaying() && !hintShown) {
-                  ensureHint();
-                } else {
-                  isPlaying = true;
-                  setStatus('playing');
-                  removeHint();
-                }
-              }, 2000);
-            }, 500);
+              log('Auto-play fallback: triggering playSound');
+              var btnPlay = document.getElementById('btnPlay');
+              if (btnPlay) {
+                btnPlay.click();
+              } else {
+                playSound();
+              }
+            }, 1000);
           }
         }, 5000);
       }
@@ -826,7 +680,6 @@
           if (payload.isPaused === false) {
             isPlaying = true;
             setStatus('playing');
-            removeHint();
           }
           if (payload.isPaused === true) {
             isPlaying = false;
@@ -853,18 +706,6 @@
         if (cmd === 'pause') { pauseSound(); return; }
         if (cmd === 'replay' || cmd === 'repeat') { replaySound(); return; }
         if (cmd === 'next' || cmd === 'nextvideo' || cmd === 'nextsound' || cmd === 'skip') { nextSound(); return; }
-        if (cmd.indexOf('volume') !== -1) {
-          var m = cmd.match(/([0-9]*\.?[0-9]+)/);
-          if (m) {
-            var v = parseFloat(m[1]);
-            if (v > 1) v /= 100;
-            if (isFinite(v)) {
-              targetVolume = v;
-              setVolume(v);
-            }
-          }
-          return;
-        }
       }
 
       if (window.chrome && window.chrome.webview) {
