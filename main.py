@@ -43,15 +43,18 @@ HTTP_POOL_TIMEOUT = float(os.getenv("HTTP_POOL_TIMEOUT", "5"))
 SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "300"))
 TRACK_META_CACHE_TTL = int(os.getenv("TRACK_META_CACHE_TTL", "600"))
 EMBED_CACHE_TTL = int(os.getenv("EMBED_CACHE_TTL", "600"))
+LYRICS_CACHE_TTL = int(os.getenv("LYRICS_CACHE_TTL", "600"))
 
 MAX_SEARCH_CACHE = int(os.getenv("MAX_SEARCH_CACHE", "500"))
 MAX_TRACK_CACHE = int(os.getenv("MAX_TRACK_CACHE", "2000"))
 MAX_EMBED_CACHE = int(os.getenv("MAX_EMBED_CACHE", "500"))
+MAX_LYRICS_CACHE = int(os.getenv("MAX_LYRICS_CACHE", "1000"))
 MAX_LIMIT = 50
 
 SEARCH_CACHE: OrderedDict[str, dict] = OrderedDict()
 TRACK_META_CACHE: OrderedDict[str, dict] = OrderedDict()
 EMBED_CACHE: OrderedDict[str, dict] = OrderedDict()
+LYRICS_CACHE: OrderedDict[str, dict] = OrderedDict()
 
 SEARCH_LOCKS: dict[str, asyncio.Lock] = {}
 SEARCH_LOCKS_GUARD = asyncio.Lock()
@@ -683,6 +686,109 @@ async def get_track_metadata(app, track_id: str, sp_dc: str):
     return None
 
 
+SPCLIENT_LYRICS_URL = "https://spclient.wg.spotify.com/color-lyrics/v2/track/{track_id}?format=json&vocalRemoval=false&market=from_token"
+
+
+def _normalize_lyrics_payload(track_id: str, data: dict) -> dict:
+    node = (data.get("lyrics") or {}) if isinstance(data, dict) else {}
+    sync_type = node.get("syncType") or "UNSYNCED"
+    raw_lines = node.get("lines") or []
+    lines: list[dict[str, Any]] = []
+    for ln in raw_lines:
+        if not isinstance(ln, dict):
+            continue
+        text = (ln.get("words") or "").strip()
+        # Keep empty lines as instrumental breaks so timing gaps stay visible.
+        # Frontend renders them as spacer glyph.
+        try:
+            start_ms = int(ln.get("startTimeMs") or 0)
+        except (ValueError, TypeError):
+            start_ms = 0
+        try:
+            dur_ms = int(ln.get("durationMs") or 0)
+        except (ValueError, TypeError):
+            dur_ms = 0
+        lines.append({
+            "startMs": max(0, start_ms),
+            "durationMs": max(0, dur_ms),
+            "endMs": max(0, start_ms) + max(0, dur_ms),
+            "text": text,
+        })
+    # Ensure chronological order for binary-search sync on frontend.
+    lines.sort(key=lambda x: x["startMs"])
+    has_sync = sync_type == "LINE_SYNCED" and any(
+        ln["startMs"] > 0 or ln["text"] for ln in lines
+    )
+    return {
+        "trackId": track_id,
+        "syncType": sync_type,
+        "hasSync": bool(has_sync),
+        "lines": lines,
+        "provider": node.get("provider") or data.get("provider") if isinstance(data, dict) else None,
+        "colors": data.get("colors") if isinstance(data, dict) else None,
+    }
+
+
+async def fetch_spotify_lyrics(app: FastAPI, track_id: str, sp_dc: str) -> dict | None:
+    """Fetch synced lyrics via spclient color-lyrics API. Returns None if unavailable."""
+    tid = sanitize_track_id(track_id)
+    if not tid:
+        return None
+    token = await get_access_token(app, sp_dc)
+    try:
+        client_token: Optional[str] = await get_client_token(app, sp_dc)
+    except Exception:
+        client_token = None
+
+    url = SPCLIENT_LYRICS_URL.format(track_id=tid)
+    headers = {
+        "authorization": f"Bearer {token}",
+        "app-platform": "WebPlayer",
+        "origin": "https://open.spotify.com",
+        "referer": "https://open.spotify.com/",
+        "user-agent": UA,
+        "accept": "application/json",
+    }
+    if client_token:
+        headers["client-token"] = client_token
+
+    async def _do_get(hdrs: dict):
+        async with SPOTIFY_HTTP_SEMAPHORE:
+            return await app.state.http.get(url, headers=hdrs, timeout=10.0)
+
+    try:
+        resp = await _do_get(headers)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+            httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+        raise HTTPException(status_code=504,
+                            detail=f"Lyrics upstream timeout: {type(exc).__name__}")
+
+    if resp.status_code == 401:
+        # Token expired — refresh once and retry.
+        app.state.token_cache.pop(_cred_key(sp_dc), None)
+        token = await get_access_token(app, sp_dc)
+        headers["authorization"] = f"Bearer {token}"
+        try:
+            resp = await _do_get(headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+            raise HTTPException(status_code=504,
+                                detail=f"Lyrics upstream timeout: {type(exc).__name__}")
+
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502,
+                            detail=f"Lyrics error {resp.status_code}: {resp.text[:300]}")
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Lyrics invalid JSON")
+    if not data or not (data.get("lyrics") or {}).get("lines"):
+        return None
+    return _normalize_lyrics_payload(tid, data)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global PLAYWRIGHT_SEMAPHORE, SPOTIFY_HTTP_SEMAPHORE, EMBED_SEMAPHORE
@@ -765,6 +871,7 @@ async def root():
         "mode": "strict per-room sp_dc",
         "search": "/search?q=QUERY&page=1&limit=20",
         "track": "/track?trackId=TRACK_ID&sp_dc=...",
+        "lyrics": "/lyrics?trackId=TRACK_ID&sp_dc=...",
         "player": "/player?trackId=TRACK_ID&sp_dc=...",
         "embed-proxy": "/embed-proxy?trackId=TRACK_ID&sp_dc=...",
         "health": "/health",
@@ -798,6 +905,36 @@ async def track_ep(request: Request, trackId: str = Query(...),
     return metadata
 
 
+@app.get("/lyrics")
+async def lyrics_ep(request: Request, trackId: str = Query(...),
+                    sp_dc: Optional[str] = Query(None)):
+    tid = sanitize_track_id(trackId)
+    if not tid:
+        raise HTTPException(status_code=400, detail="Invalid trackId")
+    room_sp_dc = _require_sp_dc(request, sp_dc)
+
+    cached = LYRICS_CACHE.get(tid)
+    if cached and _now() < cached["expiresAt"]:
+        LYRICS_CACHE.move_to_end(tid)
+        return cached["data"]
+    if cached:
+        LYRICS_CACHE.pop(tid, None)
+
+    payload = await fetch_spotify_lyrics(app, tid, room_sp_dc)
+    if not payload or not payload.get("lines"):
+        # Cache negative result briefly to avoid hammering upstream.
+        _cache_put(LYRICS_CACHE, tid,
+                   {"data": {"trackId": tid, "syncType": "NONE",
+                             "hasSync": False, "lines": [], "provider": None},
+                    "expiresAt": _now() + 60},
+                   MAX_LYRICS_CACHE)
+        raise HTTPException(status_code=404, detail="Lyrics not available for this track")
+    _cache_put(LYRICS_CACHE, tid,
+               {"data": payload, "expiresAt": _now() + LYRICS_CACHE_TTL},
+               MAX_LYRICS_CACHE)
+    return payload
+
+
 @app.get("/embed-proxy")
 async def embed_proxy(request: Request, trackId: str = Query(...),
                       sp_dc: Optional[str] = Query(None)):
@@ -829,11 +966,23 @@ async def embed_proxy(request: Request, trackId: str = Query(...),
         raise HTTPException(status_code=502, detail=f"Embed fetch {response.status_code}")
 
     html = response.text
+    # if "</head>" in html:
+    #     html = html.replace("</head>",
+    #         '<style>[data-testid="embed-widget-container"]{opacity:1 !important}'
+    #         '[data-testid="embed-widget-skeleton"],[data-testid="skeleton"]{display:none !important}'
+    #         "</style></head>", 1)
+        
     if "</head>" in html:
-        html = html.replace("</head>",
-            '<style>[data-testid="embed-widget-container"]{opacity:1 !important}'
-            '[data-testid="embed-widget-skeleton"],[data-testid="skeleton"]{display:none !important}'
-            "</style></head>", 1)
+        html = html.replace(
+            "</head>",
+            '<style>'
+            '[data-testid="embed-widget-container"]{opacity:1 !important}'
+            '[data-testid="embed-widget-skeleton"],'
+            '[data-testid="skeleton"],'
+            '[data-testid="save-on-spotify"]{display:none !important}'
+            '</style></head>',
+            1
+        )
 
     response_headers = {
         "X-Frame-Options": "ALLOWALL",
@@ -860,6 +1009,7 @@ async def clear_cache():
     SEARCH_CACHE.clear()
     TRACK_META_CACHE.clear()
     EMBED_CACHE.clear()
+    LYRICS_CACHE.clear()
     return {"success": True, "message": "All caches cleared"}
 
 

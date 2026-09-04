@@ -50,16 +50,20 @@
       position: relative;
       z-index: 2;
       width: min(1120px, calc(100% - 48px));
-      height: min(500px, calc(100vh - 48px));
+      /* Ubah height menjadi max-height atau gunakan auto dengan batas max */
+      height: 100%;
+      max-height: 500px;
       display: grid;
       grid-template-columns: min(46vw, 500px) minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr) 166px;
+      /* Ubah baris kedua agar menggunakan auto alih-alih 166px kaku */
+      grid-template-rows: minmax(0, 1fr) auto;
       align-content: center;
       align-items: stretch;
       justify-content: center;
       column-gap: clamp(30px, 4vw, 64px);
       padding: 0;
-      margin: auto
+      margin: auto;
+      transition: opacity 0.3s ease, transform 0.3s ease;
     }
 
     .artwork {
@@ -147,14 +151,37 @@
       display: flex;
       gap: 18px;
       justify-content: flex-start;
-      flex-wrap: wrap
+      flex-wrap: wrap;
+      align-items: center;
     }
 
-    .player {
+    #btnShowLyrics {
+      display: none;
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #fff;
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    #btnShowLyrics:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    #btnShowLyrics:active {
+      transform: scale(0.95);
+    }
+
+.player {
       grid-column: 2;
       grid-row: 2;
       width: 100%;
-      height: 166px;
+      /* Hapus height: 166px yang kaku atau ubah jadi auto */
+      height: auto;
       max-width: none;
       border-radius: 14px;
       overflow: hidden;
@@ -165,10 +192,154 @@
 
     .player iframe {
       width: 100%;
-      height: 166px;
+      /* Ubah height menjadi 166px maksimal atau biarkan mengisi penuh player */
+      height: 152px; 
       border: 0;
       display: block;
       background: #181818
+    }
+
+    /* =========================================
+       FULLSCREEN LYRICS VIEW (SPOTIFY DESKTOP STYLE)
+       ========================================= */
+    #lyricsView {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+      backdrop-filter: blur(30px) brightness(0.3);
+      -webkit-backdrop-filter: blur(30px) brightness(0.3);
+    }
+
+    #lyricsView.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #btnCloseLyrics {
+      position: absolute;
+      top: 30px;
+      right: 30px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      font-size: 24px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, transform 0.2s;
+      z-index: 12;
+    }
+
+    #btnCloseLyrics:hover {
+      background: rgba(255, 255, 255, 0.3);
+      transform: scale(1.1);
+    }
+
+    /* Viewport Lirik dengan efek fade di atas dan bawah */
+    .lyrics-viewport {
+      width: 100%;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 0 5vw;
+      /* Responsif margin kiri-kanan */
+
+      /* Efek gradien menghilang di ujung atas dan bawah */
+      mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+
+      /* Menyembunyikan scrollbar */
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      z-index: 11;
+    }
+
+    .lyrics-viewport::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Container dalam untuk memberikan ruang scroll ekstra */
+    #lyricsContainer {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      padding: 45vh 0;
+      /* Memberikan ruang agar lirik pertama/terakhir bisa ke tengah layar */
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    /* Styling Baris Lirik */
+    .lyric-line {
+      font-size: clamp(28px, 4.5vw, 48px);
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -0.03em;
+      color: rgba(255, 255, 255, 0.45);
+      transition: color 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+      cursor: pointer;
+      transform-origin: left center;
+    }
+
+    .lyric-line:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .lyric-line.active {
+      color: #ffffff;
+      transform: scale(1.02);
+      text-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    .lyric-line.unsynced {
+      font-size: clamp(20px, 3.5vw, 36px);
+      margin-bottom: 16px;
+    }
+
+    /* Saat lirik aktif: sembunyikan artwork/info, tapi iframe tetap tampil kanan-bawah */
+    body.lyrics-active .content {
+      opacity: 1;
+      transform: none;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    body.lyrics-active .artwork,
+    body.lyrics-active .info {
+      opacity: 0;
+      transform: scale(0.95);
+      pointer-events: none;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    body.lyrics-active .player {
+      position: fixed;
+      right: 28px;
+      bottom: 28px;
+      width: min(340px, calc(100vw - 48px));
+      height: 166px;
+      z-index: 30;
+      opacity: 1;
+      pointer-events: auto;
+      border-radius: 14px;
+    }
+
+    /* Geser lirik sedikit ke kiri agar tidak tertutup iframe */
+    body.lyrics-active .lyrics-viewport {
+      padding: 0 calc(min(340px, calc(100vw - 48px)) + 60px) 0 5vw;
+    }
+
+    body.lyrics-active #lyricsContainer {
+      max-width: 760px;
+      margin: 0 auto 0 0;
     }
 
     @media (max-width:760px) {
@@ -193,8 +364,6 @@
         width: min(78vw, 360px);
         height: auto;
         aspect-ratio: 1;
-        justify-self: center;
-        align-self: auto
       }
 
       .info {
@@ -203,7 +372,6 @@
         text-align: center;
         width: 100%;
         padding-top: 0;
-        align-self: auto
       }
 
       .info .stats {
@@ -215,7 +383,43 @@
         grid-row: 3;
         width: 100%;
         height: 166px;
-        align-self: auto
+      }
+
+      #btnCloseLyrics {
+        top: 15px;
+        right: 15px;
+        width: 36px;
+        height: 36px;
+        font-size: 20px;
+      }
+
+      .lyrics-viewport {
+        padding: 0 24px;
+      }
+
+      body.lyrics-active .player {
+        right: 12px;
+        left: 12px;
+        bottom: 12px;
+        width: auto;
+        height: 152px;
+      }
+
+      body.lyrics-active .player iframe {
+        height: 152px;
+      }
+
+      body.lyrics-active .lyrics-viewport {
+        padding: 0 24px 190px;
+      }
+
+      body.lyrics-active #lyricsContainer {
+        max-width: 100%;
+        margin: 0 auto;
+      }
+
+      body.lyrics-active #controls {
+        bottom: 178px;
       }
     }
 
@@ -259,7 +463,10 @@
       background: #1db954;
     }
 
-    /* Animasi replay */
+    #controls #btnLyrics.active {
+      background: #1db954;
+    }
+
     @keyframes replayPulse {
       0% {
         transform: scale(1);
@@ -320,17 +527,30 @@
 <body>
   <div class="bg" id="bg"></div>
   <div class="bg-overlay"></div>
+
   <div class="content" id="content">
     <div id="loadingWrap" style="display:flex;flex-direction:column;align-items:center;gap:16px">
       <div class="spinner"></div>
       <div class="loading">Loading track...</div>
     </div>
   </div>
+
+  <!-- LYRICS VIEW -->
+  <div id="lyricsView">
+    <button id="btnCloseLyrics" title="Close Lyrics">×</button>
+    <div class="lyrics-viewport">
+      <div id="lyricsContainer">
+        <!-- Lirik akan di-inject ke sini -->
+      </div>
+    </div>
+  </div>
+
   <div id="controls">
     <button class="ctl-btn" id="btnReplay" title="Replay">⟳</button>
     <button class="ctl-btn" id="btnPrev" title="Pause">⏸</button>
     <button class="ctl-btn main" id="btnPlay" title="Play">▶</button>
     <button class="ctl-btn" id="btnNext" title="Next">⏭</button>
+    <button class="ctl-btn" id="btnLyrics" title="Show Lyrics" style="display:none">🎤</button>
   </div>
 
   <script>
@@ -347,11 +567,22 @@
       var embedReady = false;
       var checkInterval = null;
 
+      // Lyrics State
+      var lyricsData = null;
+      var currentPosition = 0; // dalam milidetik
+      var activeLineIndex = -1;
+      var isLyricsActive = false;
+
       // ===== DOM =====
       var loadingWrap = document.getElementById('loadingWrap');
       var bgEl = document.getElementById('bg');
       var btnReplay = document.getElementById('btnReplay');
       var btnPlay = document.getElementById('btnPlay');
+
+      var lyricsView = document.getElementById('lyricsView');
+      var lyricsViewport = document.querySelector('.lyrics-viewport');
+      var lyricsContainer = document.getElementById('lyricsContainer');
+      var btnCloseLyrics = document.getElementById('btnCloseLyrics');
 
       function log(msg) { console.log('[SP]', msg); }
 
@@ -407,6 +638,7 @@
             for (var i = 0; i < audios.length; i++) {
               var a = audios[i];
               if (!a.paused && !a.ended && a.currentTime > 0) {
+                currentPosition = a.currentTime * 1000;
                 return true;
               }
             }
@@ -430,12 +662,7 @@
 
       // ===== PLAY / PAUSE =====
       function playSound() {
-        log('Play called');
-        if (!embedReady) {
-          log('Embed not ready');
-          return;
-        }
-
+        if (!embedReady) return;
         endedSent = false;
         isPlaying = true;
         if (btnPlay) {
@@ -447,13 +674,9 @@
         if (iframe) {
           try {
             iframe.contentWindow.postMessage({ command: 'play' }, 'https://open.spotify.com');
-            log('Play: postMessage sent');
-          } catch (e) {
-            log('Play: postMessage failed - ' + e.message);
-          }
+          } catch (e) { }
         }
 
-        // Coba klik tombol play di dalam iframe
         try {
           var doc = getEmbedDoc();
           if (doc) {
@@ -470,7 +693,6 @@
                   var label = (btn.getAttribute('aria-label') || '').toLowerCase();
                   if (label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
                     btn.click();
-                    log('Play: button clicked');
                     isPlaying = true;
                     break;
                   }
@@ -478,9 +700,7 @@
               } catch (e) { }
             }
           }
-        } catch (e) {
-          log('Play: cannot access iframe DOM - ' + e.message);
-        }
+        } catch (e) { }
 
         setTimeout(function () {
           if (isActuallyPlaying()) {
@@ -489,15 +709,11 @@
               btnPlay.innerHTML = '⏸';
               btnPlay.classList.add('playing');
             }
-            log('Playback confirmed');
-          } else {
-            log('Playback not confirmed');
           }
         }, 1000);
       }
 
       function pauseSound() {
-        log('Pause called');
         isPlaying = false;
         if (btnPlay) {
           btnPlay.innerHTML = '▶';
@@ -523,9 +739,6 @@
 
       // ===== REPLAY =====
       function replaySound() {
-        log('Replay called');
-
-        // Animasi tombol replay
         if (btnReplay) {
           btnReplay.classList.remove('replaying');
           void btnReplay.offsetWidth;
@@ -537,57 +750,46 @@
 
         endedSent = false;
         isPlaying = true;
+        currentPosition = 0;
+        updateLyrics(true);
+
         if (btnPlay) {
           btnPlay.innerHTML = '⏸';
           btnPlay.classList.add('playing');
         }
 
         var media = getMediaElement();
-
         if (media) {
           try {
-            // Reset ke awal
             media.currentTime = 0;
-
-            // Play dari awal
             var playPromise = media.play();
             if (playPromise !== undefined) {
               playPromise.then(function () {
-                log('Replay: success, playing from 0');
                 isPlaying = true;
                 if (btnPlay) {
                   btnPlay.innerHTML = '⏸';
                   btnPlay.classList.add('playing');
                 }
-              }).catch(function (err) {
-                log('Replay: play failed - ' + err.message);
+              }).catch(function () {
                 replayFallback();
               });
             }
             return;
-          } catch (e) {
-            log('Replay: media error - ' + e.message);
-          }
+          } catch (e) { }
         }
-
-        // Fallback
         replayFallback();
       }
 
       function replayFallback() {
-        log('Replay: using fallback');
-
         try {
           var doc = getEmbedDoc();
           if (doc) {
-            // Cari tombol play
             var selectors = [
               'button[data-testid="play-pause-button"]',
               'button[data-testid="play-button"]',
               'button[aria-label="Play"]',
               'button[aria-label="Putar"]'
             ];
-
             for (var i = 0; i < selectors.length; i++) {
               try {
                 var btn = doc.querySelector(selectors[i]);
@@ -595,7 +797,6 @@
                   var label = (btn.getAttribute('aria-label') || '').toLowerCase();
                   if (label.indexOf('pause') === -1 && label.indexOf('jeda') === -1) {
                     btn.click();
-                    log('Replay: button clicked');
                     isPlaying = true;
                     if (btnPlay) {
                       btnPlay.innerHTML = '⏸';
@@ -606,8 +807,6 @@
                 }
               } catch (e) { }
             }
-
-            // Coba audio element lagi
             var media = doc.querySelector('audio, video');
             if (media) {
               media.currentTime = 0;
@@ -620,35 +819,26 @@
               return;
             }
           }
-        } catch (e) {
-          log('Replay fallback error: ' + e.message);
-        }
+        } catch (e) { }
 
-        // Ultimate fallback: reload embed
         var iframe = getIframe();
         if (iframe) {
           var src = iframe.src;
           iframe.src = 'about:blank';
           setTimeout(function () {
             iframe.src = src;
-            log('Replay: embed reloaded');
             embedReady = false;
             setTimeout(function () {
               embedReady = true;
-              setTimeout(function () {
-                playSound();
-              }, 500);
+              setTimeout(function () { playSound(); }, 500);
             }, 1500);
           }, 300);
         }
       }
 
       function nextSound() {
-        log('Next called');
         sendToHost('nextRequested');
-        setTimeout(function () {
-          replaySound();
-        }, 500);
+        setTimeout(function () { replaySound(); }, 500);
       }
 
       function togglePlay() {
@@ -659,12 +849,164 @@
         }
       }
 
+      // ===== LYRICS LOGIC =====
+      function fetchLyrics() {
+        fetch('/lyrics?trackId=' + encodeURIComponent(trackId) + credQs)
+          .then(function (res) {
+            if (!res.ok) throw new Error('No lyrics');
+            return res.json();
+          })
+          .then(function (data) {
+            if (data && data.lines && data.lines.length > 0) {
+              lyricsData = data;
+              renderLyrics();
+              var btn = document.getElementById('btnShowLyrics');
+              if (btn) btn.style.display = 'inline-block';
+              var btnCtl = document.getElementById('btnLyrics');
+              if (btnCtl) btnCtl.style.display = 'flex';
+            }
+          })
+          .catch(function (err) {
+            log('Lyrics not available');
+          });
+      }
+
+      function renderLyrics() {
+        if (!lyricsData) return;
+        lyricsContainer.innerHTML = '';
+
+        var isSynced = lyricsData.hasSync;
+
+        lyricsData.lines.forEach(function (line, index) {
+          var el = document.createElement('div');
+          el.className = 'lyric-line' + (isSynced ? '' : ' unsynced');
+          el.textContent = line.text || '\u00A0';
+          el.dataset.index = index;
+
+          if (isSynced) {
+            el.addEventListener('click', function () {
+              seekTo(line.startMs);
+            });
+          }
+
+          lyricsContainer.appendChild(el);
+        });
+      }
+
+      function seekTo(ms) {
+        try {
+          var doc = getEmbedDoc();
+          if (doc) {
+            var media = doc.querySelector('audio, video');
+            if (media) {
+              media.currentTime = ms / 1000;
+              if (!isPlaying) togglePlay();
+              currentPosition = ms;
+              updateLyrics(true);
+            }
+          }
+        } catch (e) { }
+      }
+
+      function updateLyrics(forceScroll) {
+        if (!isLyricsActive || !lyricsData || !lyricsData.hasSync) return;
+
+        var lines = lyricsData.lines;
+        var newActiveIndex = -1;
+
+        for (var i = 0; i < lines.length; i++) {
+          if (currentPosition >= lines[i].startMs &&
+            (i === lines.length - 1 || currentPosition < lines[i + 1].startMs)) {
+            newActiveIndex = i;
+            break;
+          }
+        }
+
+        if (newActiveIndex !== activeLineIndex || forceScroll) {
+          var els = lyricsContainer.getElementsByClassName('lyric-line');
+
+          if (activeLineIndex >= 0 && activeLineIndex < els.length) {
+            els[activeLineIndex].classList.remove('active');
+          }
+
+          activeLineIndex = newActiveIndex;
+
+          if (activeLineIndex >= 0 && activeLineIndex < els.length) {
+            var activeEl = els[activeLineIndex];
+            activeEl.classList.add('active');
+
+            // Hitung posisi center berdasarkan tinggi viewport (efek mask-image & padding)
+            var viewportHeight = lyricsViewport.clientHeight;
+            var elTop = activeEl.offsetTop; // Jarak relatif ke awal #lyricsContainer
+            var elHeight = activeEl.clientHeight;
+
+            lyricsViewport.scrollTo({
+              top: elTop - (viewportHeight / 2) + (elHeight / 2),
+              behavior: 'smooth'
+            });
+          }
+        }
+      }
+
+      // ===== LYRICS SHOW / HIDE (dipakai tombol + host command + controls) =====
+      function syncLyricsBtn() {
+        var b = document.getElementById('btnLyrics');
+        if (!b) return;
+        if (isLyricsActive) {
+          b.classList.add('active');
+          b.title = 'Close Lyrics';
+        } else {
+          b.classList.remove('active');
+          b.title = 'Show Lyrics';
+        }
+      }
+
+      function showLyrics() {
+        if (!lyricsView) return;
+        lyricsView.classList.add('active');
+        document.body.classList.add('lyrics-active');
+        isLyricsActive = true;
+        if (!lyricsData) fetchLyrics();
+        updateLyrics(true);
+        syncLyricsBtn();
+      }
+
+      function closeLyrics() {
+        if (!lyricsView) return;
+        lyricsView.classList.remove('active');
+        document.body.classList.remove('lyrics-active');
+        isLyricsActive = false;
+        syncLyricsBtn();
+      }
+
+      function toggleLyrics() {
+        if (isLyricsActive) {
+          closeLyrics();
+        } else {
+          showLyrics();
+        }
+      }
+
+      // Events for Lyrics Overlay
+      btnCloseLyrics.addEventListener('click', closeLyrics);
+
       // ===== MONITOR PLAYBACK =====
       function startMonitoring() {
         if (checkInterval) clearInterval(checkInterval);
 
         checkInterval = setInterval(function () {
           if (!embedReady) return;
+
+          try {
+            var doc = getEmbedDoc();
+            if (doc) {
+              var media = doc.querySelector('audio,video');
+              if (media) {
+                currentPosition = media.currentTime * 1000;
+                if (isLyricsActive) updateLyrics();
+              }
+            }
+          } catch (e) { }
 
           var playing = isActuallyPlaying();
 
@@ -674,14 +1016,18 @@
               btnPlay.innerHTML = '⏸';
               btnPlay.classList.add('playing');
             }
-            log('Playback detected');
           }
 
           if (!playing && isPlaying) {
-            // Mungkin pause atau ended
+            try {
+              var doc2 = getEmbedDoc();
+              if (doc2) {
+                var m = doc2.querySelector('audio,video');
+                if (m) currentPosition = m.currentTime * 1000;
+              }
+            } catch (e) { }
           }
 
-          // Cek ended via audio element
           try {
             var doc = getEmbedDoc();
             if (doc) {
@@ -689,19 +1035,17 @@
               for (var i = 0; i < audios.length; i++) {
                 var a = audios[i];
                 if (a.ended && !a.paused && isPlaying) {
-                  log('Audio ended detected');
                   notifyEnded();
                 }
               }
             }
           } catch (e) { }
-        }, 2000);
+        }, 500);
       }
 
       // ===== RENDER =====
       function render(track) {
         document.title = (track.title || 'Spotify') + ' - ' + (track.artist || '');
-
         if (loadingWrap) loadingWrap.style.display = 'none';
 
         if (track.thumbnail) {
@@ -710,7 +1054,6 @@
 
         var content = document.getElementById('content');
 
-        // Artwork
         var artwork = document.createElement('div');
         artwork.className = 'artwork';
         var img = document.createElement('img');
@@ -720,20 +1063,29 @@
         artwork.appendChild(img);
         content.appendChild(artwork);
 
-        // Info
         var info = document.createElement('div');
         info.className = 'info';
         var stats = [];
         if (track.duration && track.duration !== '0:00') stats.push('⏱ ' + track.duration);
         if (track.album) stats.push(track.album);
 
+        var statsHtml = stats.length ? stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') : '';
+        // statsHtml += '<button id="btnShowLyrics">Available Lyrics</button>';
+
         info.innerHTML = '<h1>' + (track.title || 'Unknown') + '</h1>' +
           '<h2>' + (track.artist || '') + '</h2>' +
-          (stats.length ? '<div class="stats">' + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') +
-            '</div>' : '');
+          '<div class="stats">' + statsHtml + '</div>';
+
         content.appendChild(info);
 
-        // Player
+        setTimeout(function () {
+          var btnShow = document.getElementById('btnShowLyrics');
+          if (btnShow) {
+            btnShow.addEventListener('click', showLyrics);
+            fetchLyrics();
+          }
+        }, 100);
+
         var player = document.createElement('div');
         player.className = 'player';
         var iframe = document.createElement('iframe');
@@ -746,40 +1098,27 @@
         player.appendChild(iframe);
         content.appendChild(player);
 
-        log('Embed injected');
-
         iframe.onload = function () {
-          log('Embed loaded');
           embedReady = true;
           sendToHost('embed_ready');
           startMonitoring();
 
-          // ===== AUTO-PLAY: delay 1 detik lalu trigger play =====
           setTimeout(function () {
-            log('Auto-play: triggering playSound after 1s delay');
-
-            // Trigger click pada btnPlay
             var btnPlay = document.getElementById('btnPlay');
             if (btnPlay) {
               btnPlay.click();
-              log('Auto-play: btnPlay.click() triggered');
             } else {
-              // Fallback: panggil langsung
               playSound();
-              log('Auto-play: playSound() called directly');
             }
           }, 1000);
         };
 
-        // Fallback: jika onload tidak terpanggil
         setTimeout(function () {
           if (!embedReady) {
-            log('Embed onload fallback triggered');
             embedReady = true;
             startMonitoring();
 
             setTimeout(function () {
-              log('Auto-play fallback: triggering playSound');
               var btnPlay = document.getElementById('btnPlay');
               if (btnPlay) {
                 btnPlay.click();
@@ -796,6 +1135,7 @@
       document.getElementById('btnPrev').addEventListener('click', pauseSound);
       document.getElementById('btnReplay').addEventListener('click', replaySound);
       document.getElementById('btnNext').addEventListener('click', nextSound);
+      document.getElementById('btnLyrics').addEventListener('click', toggleLyrics);
 
       // ===== EMBED MESSAGES =====
       window.addEventListener('message', function (e) {
@@ -804,6 +1144,12 @@
 
         if (data.type === 'playback_update' || data.type === 'playback_started') {
           var payload = data.payload || data.data || {};
+
+          if (payload.position !== undefined) {
+            currentPosition = payload.position;
+            if (isLyricsActive) updateLyrics();
+          }
+
           if (payload.isPaused === false) {
             isPlaying = true;
             if (btnPlay) {
@@ -832,14 +1178,26 @@
 
       // ===== HOST COMMANDS =====
       function handleCommand(data) {
-        var cmd = typeof data === 'string' ? data : (data.type || data.command || '');
-        cmd = String(cmd).toLowerCase();
+        var raw = typeof data === 'string' ? data : (data.type || data.command || '');
+        var cmd = String(raw).toLowerCase().trim();
+        var norm = cmd.replace(/[\s_\-]+/g, '');
 
         if (cmd === 'play') { playSound(); return; }
         if (cmd === 'pause') { pauseSound(); return; }
         if (cmd === 'replay' || cmd === 'repeat') { replaySound(); return; }
         if (cmd === 'next' || cmd === 'nextvideo' || cmd === 'nextsound' || cmd === 'skip') { nextSound(); return; }
         if (cmd === 'toggle' || cmd === 'playpause') { togglePlay(); return; }
+
+        // Lyrics — logika host command sama seperti play/pause/replay/next:
+        // bisa dipanggil kapan saja via WebView postMessage maupun window.postMessage,
+        // walau lyrics overlay sedang tampil.
+        if (norm === 'showlyrics' || norm === 'showlyric' || norm === 'showliric' ||
+          norm === 'openlyrics' || norm === 'openlyric' || norm === 'showlyricsview' ||
+          norm === 'lyrics' || norm === 'lyric' || norm === 'lirik') { showLyrics(); return; }
+        if (norm === 'closelyrics' || norm === 'closelyric' || norm === 'closeliric' ||
+          norm === 'hidelyrics' || norm === 'hidelyric' || norm === 'closelyricsview') { closeLyrics(); return; }
+        if (norm === 'togglelyrics' || norm === 'togglelyric' || norm === 'toggleliric' ||
+          norm === 'lyricstoggle') { toggleLyrics(); return; }
       }
 
       if (window.chrome && window.chrome.webview) {
@@ -860,6 +1218,12 @@
       // ===== KEYBOARD =====
       document.addEventListener('keydown', function (e) {
         if (e.target.tagName === 'INPUT') return;
+
+        if (e.key === 'Escape' && isLyricsActive) {
+          btnCloseLyrics.click();
+          return;
+        }
+
         if (e.key === ' ' || e.key === 'Space') {
           e.preventDefault();
           togglePlay();
@@ -881,18 +1245,15 @@
       if (!trackId) { showError('Missing trackId'); return; }
       if (!spDc) { showError('Missing sp_dc'); return; }
 
-      log('Fetching track info...');
       fetch('/track?trackId=' + encodeURIComponent(trackId) + credQs)
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
         .then(function (track) {
-          log('Track loaded');
           render(track);
         })
         .catch(function (err) {
-          log('Error:', err);
           showError('Failed to load: ' + err.message);
         });
 
