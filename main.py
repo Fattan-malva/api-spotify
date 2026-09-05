@@ -625,7 +625,7 @@ async def get_track_metadata(app, track_id: str, sp_dc: str):
     try:
         response = await app.state.http.get(
             f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{tid}",
-            headers={"User-Agent": UA}, timeout=5.0)
+            headers={"User-Agent": UA}, timeout=10.0)
         if response.status_code == 200:
             data = response.json()
             oembed_thumb = data.get("thumbnail_url")
@@ -645,7 +645,7 @@ async def get_track_metadata(app, track_id: str, sp_dc: str):
                           {"uri": f"spotify:track:{tid}",
                            "includeVideoAssociationItems": False},
                           sp_dc=sp_dc),
-            timeout=8.0)
+            timeout=15.0)
         objects = find_track_objs(data.get("data"))
         found = next((item for item in objects if item.get("id") == tid), None)
         root = data.get("data") or {}
@@ -798,7 +798,7 @@ async def lifespan(app: FastAPI):
 
     timeout = httpx.Timeout(connect=HTTP_CONNECT_TIMEOUT, read=HTTP_READ_TIMEOUT,
                             write=HTTP_WRITE_TIMEOUT, pool=HTTP_POOL_TIMEOUT)
-    limits = httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=30)
+    limits = httpx.Limits(max_connections=200, max_keepalive_connections=50, keepalive_expiry=60)
     app.state.http = httpx.AsyncClient(timeout=timeout, limits=limits,
                                        follow_redirects=True, http2=True,
                                        headers=SPOTIFY_HEADERS)
@@ -958,7 +958,7 @@ async def embed_proxy(request: Request, trackId: str = Query(...),
     try:
         async with EMBED_SEMAPHORE:
             response = await app.state.http.get(target, headers=headers,
-                                                cookies={"sp_dc": room_sp_dc}, timeout=15.0)
+                                                cookies={"sp_dc": room_sp_dc}, timeout=25.0)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout) as exc:
         raise HTTPException(status_code=504, detail=f"Spotify embed timeout: {type(exc).__name__}")
 

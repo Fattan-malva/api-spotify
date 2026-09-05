@@ -19,3 +19,4 @@ player/
 
 docker-compose.yml
 Dockerfile
+api-spotify.tsm-dev.cloud.conf
